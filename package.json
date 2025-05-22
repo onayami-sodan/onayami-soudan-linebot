@@ -1,5 +1,5 @@
 {
-  "name": "takkun-linebot",
+  "name": onayami-soudan-linebot",
   "version": "1.0.0",
   "description": "たっくんのLINEお悩みボット",
   "main": "index.js",
