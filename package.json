@@ -13,3 +13,7 @@
     "dotenv": "^16.3.1"
   }
 }
+"dependencies": {
+  "@supabase/supabase-js": "^2.39.7",  // 最新版か安定版でOK
+  ...
+}
