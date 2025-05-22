@@ -1,14 +1,5 @@
-{
-  "name": "takkun-linebot",
-  "version": "1.0.0",
-  "description": "たっくんのLINEお悩みボット",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "express": "^4.18.2",
-    "express-session": "^1.17.3",
-    "line-bot-sdk": "^7.5.0"
-  }
+"dependencies": {
+  "express": "^4.18.2",
+  "express-session": "^1.17.3",
+  "@line/bot-sdk": "^7.5.0"
 }
