@@ -1,52 +1,41 @@
-// 修正済み：Redisを使ってセッションを永続化したLINEボットサンプル
 require("dotenv").config();
 
 const express = require("express");
-const line = require("@line/bot-sdk");
 const session = require("express-session");
-const RedisStore = require("connect-redis")(session);
-const redis = require("redis");
+const Redis = require("ioredis");
+const RedisStore = require("connect-redis").default;
+const line = require("@line/bot-sdk");
 
 const app = express();
+const redisClient = new Redis(process.env.REDIS_URL);
 
-// Redis クライアントの作成
-const redisClient = redis.createClient({
-  url: process.env.REDIS_URL,
-  legacyMode: true, // 必要に応じて
-});
-redisClient.connect().catch(console.error);
-
-// LINE Bot 認証情報
-const config = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
-};
-const client = new line.Client(config);
-
-// Redisベースのセッション設定
 app.use(
   session({
     store: new RedisStore({ client: redisClient }),
     secret: "onayami-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false }, // HTTPSを使うなら true に
   })
 );
 
+const config = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
+};
+
+const client = new line.Client(config);
+
 app.use(express.json());
 
-// webhookエンドポイント
 app.post("/webhook", line.middleware(config), (req, res) => {
   Promise.all(req.body.events.map((event) => handleEvent(event, req.session)))
     .then((result) => res.json(result))
     .catch((err) => {
-      console.error("handleEvent error:", err);
+      console.error("Webhook error:", err);
       res.status(500).end();
     });
 });
 
-// ユーザーごとの会話処理
 async function handleEvent(event, session) {
   if (event.type !== "message" || event.message.type !== "text") {
     return null;
@@ -55,9 +44,6 @@ async function handleEvent(event, session) {
   const userId = event.source.userId;
   session[userId] = session[userId] || { count: 0 };
   session[userId].count++;
-
-  console.log("userId:", userId);
-  console.log("session:", session[userId]);
 
   const count = session[userId].count;
   let reply = "";
@@ -77,10 +63,13 @@ async function handleEvent(event, session) {
   });
 }
 
-// 仮のGPT応答処理
 async function callGPT(userMessage) {
   return "なるほど…そのお悩み、よくありますよ。";
 }
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server running on ${port}`));
+
 
 app.listen(3000);
 console.log("Server running on port 3000");
