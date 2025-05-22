@@ -1,11 +1,10 @@
 require("dotenv").config();
-
-const express = require("express");
-const line = require("@line/bot-sdk");
+const express = require('express');
+const line = require('@line/bot-sdk');
+const session = require('express-session');
 
 const app = express();
 
-// LINEの認証情報（環境変数に合わせてね）
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET
@@ -13,58 +12,56 @@ const config = {
 
 const client = new line.Client(config);
 
-// JSONパース用
-app.use(express.json());
+// セッション（本番環境ではMemoryStoreは非推奨 → 永続DB対応が必要）
+app.use(session({
+  secret: 'onayami-secret',
+  resave: false,
+  saveUninitialized: true
+}));
 
-// ユーザーのカウント保存用（セッションではなくメモリで一時的に）
-const userSessions = {};
-
-// Webhookエンドポイント
-app.post("/webhook", line.middleware(config), async (req, res) => {
-  try {
-    const results = await Promise.all(
-      req.body.events.map(event => handleEvent(event))
-    );
-    res.status(200).json(results); // ← LINEが喜ぶ返答
-  } catch (error) {
-    console.error("Webhook error:", error);
-    res.status(500).end(); // ← エラーがあっても終了させる
-  }
+// Webhookは LINE middleware + 生ボディで処理（body-parser禁止！）
+app.post('/webhook', line.middleware(config), (req, res) => {
+  Promise
+    .all(req.body.events.map(event => handleEvent(event, req.session)))
+    .then(result => res.json(result))
+    .catch((err) => {
+      console.error('Webhook error:', err);
+      res.status(500).end();  // これがないとLINE側に「500返し続けるBot」扱いになる
+    });
 });
 
-async function handleEvent(event) {
-  if (event.type !== "message" || event.message.type !== "text") {
+async function handleEvent(event, session) {
+  if (event.type !== 'message' || event.message.type !== 'text') {
     return null;
   }
 
   const userId = event.source.userId;
-  userSessions[userId] = userSessions[userId] || { count: 0 };
-  userSessions[userId].count++;
+  session[userId] = session[userId] || { count: 0 };
+  session[userId].count++;
 
-  const count = userSessions[userId].count;
-  let reply = "";
+  const count = session[userId].count;
+  let reply = '';
 
   if (count === 1) {
-    reply = "こんにちは。今日はどんなお悩みですか？";
+    reply = 'こんにちは。今日はどんなお悩みですか？';
   } else if (count <= 5) {
     reply = await callGPT(event.message.text);
   } else {
-    reply = "ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password";
+    reply = 'ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password';
   }
 
   return client.replyMessage(event.replyToken, {
-    type: "text",
+    type: 'text',
     text: reply
   });
 }
 
-// GPTの仮の返答関数（本番ではAPIに変更してね）
-async function callGPT(userMessage) {
-  return "なるほど…そのお悩み、よくありますよ。";
+// GPTの仮返信（本番はAPI連携へ）
+async function callGPT(message) {
+  return 'なるほど…そのお悩み、よくありますよ。';
 }
 
-// Render用：PORT変数が使われる
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+// サーバー起動
+app.listen(3000, () => {
+  console.log('LINE Bot running on port 3000');
 });
