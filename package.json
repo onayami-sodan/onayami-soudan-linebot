@@ -1,7 +1,7 @@
 {
   "name": onayami-soudan-linebot",
   "version": "1.0.0",
-  "description": "たっくんのLINEお悩みボット",
+  "description": "LINEお悩み相談室",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
