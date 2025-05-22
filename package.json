@@ -9,6 +9,6 @@
   "dependencies": {
     "express": "^4.18.2",
     "express-session": "^1.17.3",
-    "line-bot-sdk": "^7.5.0"
+    "line-bot-sdk": "^7.4.1"
   }
 }
