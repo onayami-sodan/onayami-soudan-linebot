@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 // LINE Bot と GPT を連携したサンプルコード（5ターンでnoteに誘導）
 
 const express = require('express');
