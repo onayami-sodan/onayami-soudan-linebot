@@ -1,20 +1,21 @@
-// LINEボット × GPT 応答（5ターンでnote誘導）
+// LINE Bot と GPT を連携したサンプルコード（5ターンでnoteに誘導）
 
 const express = require('express');
-const { Client } = require('@line/bot-sdk');
+const line = require('@line/bot-sdk');
 const session = require('express-session');
-const axios = require('axios');
+const bodyParser = require('body-parser');
 
 const app = express();
 
+// LINEの認証情報（Renderの環境変数に設定してね）
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET
 };
 
-const client = new Client(config);
+const client = new line.Client(config);
 
-// セッション（ユーザーごとのターン数カウント）
+// セッション管理
 app.use(session({
   secret: 'onayami-secret',
   resave: false,
@@ -22,65 +23,44 @@ app.use(session({
 }));
 
 app.use(express.json());
-
-app.post('/webhook', (req, res) => {
+app.post('/webhook', line.middleware(config), (req, res) => {
   Promise
     .all(req.body.events.map(event => handleEvent(event, req.session)))
     .then(result => res.json(result));
 });
 
 async function handleEvent(event, session) {
-  if (event.type !== 'message' || event.message.type !== 'text') return null;
+  if (event.type !== 'message' || event.message.type !== 'text') {
+    return null;
+  }
 
   const userId = event.source.userId;
-  session[userId] = session[userId] || { turn: 0 };
-  session[userId].turn++;
+  session[userId] = session[userId] || { count: 0 };
+  session[userId].count++;
 
-  const turn = session[userId].turn;
+  const count = session[userId].count;
+  let reply = '';
 
-  if (turn === 1) {
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: 'こんにちは。今日はどんなお悩みですか？'
-    });
-  } else if (turn <= 5) {
-    const userMessage = event.message.text;
-    const gptResponse = await askGPT(userMessage);
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: gptResponse
-    });
+  if (count === 1) {
+    reply = 'こんにちは。今日はどんなお悩みですか？';
+  } else if (count <= 5) {
+    reply = await callGPT(event.message.text);
   } else {
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: 'ここから先は有料相談になります。
-noteで「今日のパスワード」をご購入くださいね 💌\nhttps://note.com/○○○/n/note-pass-code'
-    });
+    reply = 'ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password';
   }
+
+  return client.replyMessage(event.replyToken, {
+    type: 'text',
+    text: reply
+  });
 }
 
-async function askGPT(userInput) {
-  try {
-    const response = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4',
-        messages: [{ role: 'user', content: userInput }]
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    return response.data.choices[0].message.content.trim();
-  } catch (error) {
-    return 'ごめんなさい、少し混み合っているみたい。時間をおいてまた話しかけてね。';
-  }
+// 仮のGPT返答関数（後で本物に差し替えられる）
+async function callGPT(userMessage) {
+  // ここで実際にOpenAI APIにリクエストを送るように書き換えてね
+  return 'なるほど…そのお悩み、よくありますよ。';
 }
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Listening on ${port}`);
-});
+app.listen(3000);
+console.log('Server running');
+
