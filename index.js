@@ -1,7 +1,7 @@
 // index.js
 require('dotenv').config();
 const express = require('express');
-const { messagingApi, validateSignature } = require('@line/bot-sdk');
+const { messagingApi } = require('@line/bot-sdk');
 const { OpenAI } = require('openai');
 const { supabase } = require('./supabaseClient');
 
@@ -10,8 +10,15 @@ app.use(express.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const line = new messagingApi.MessagingApiClient({
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+});
+
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
+  if (!events || events.length === 0) {
+    return res.status(200).send("No events");
+  }
 
   for (const event of events) {
     if (event.type === 'message' && event.message.type === 'text') {
@@ -30,23 +37,21 @@ app.post('/webhook', async (req, res) => {
 
       await supabase.from('user_sessions').upsert({ user_id: userId, count });
 
-      // ChatGPT API 呼び出し
+      // ChatGPT API 呼び出し（5ターンまでなら続けられるように今後改良可）
       const chatResponse = await openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [
-          { role: 'system', content: 'あなたは優しい相談相手です。' },
+          { role: 'system', content: 'あなたは悩みにやさしく寄り添う相談員です。安心できる言葉で答えてください。' },
           { role: 'user', content: userMessage }
         ],
       });
 
       const replyText = chatResponse.choices[0].message.content;
 
-      // LINE 返信
-      await messagingApi.replyMessage(process.env.LINE_CHANNEL_ACCESS_TOKEN, {
+      // LINE返信
+      await line.replyMessage({
         replyToken: event.replyToken,
-        messages: [
-          { type: 'text', text: replyText }
-        ]
+        messages: [{ type: 'text', text: replyText }],
       });
     }
   }
