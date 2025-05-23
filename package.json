@@ -1,2 +1,18 @@
-npm init -y
-npm install express dotenv @line/bot-sdk @supabase/supabase-js openai
+{
+  "name": "onayami-soudan-linebot",
+  "version": "1.0.0",
+  "description": "お悩み相談LINEボット",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^7.5.0",
+    "@supabase/supabase-js": "^2.0.0",
+    "openai": "^4.5.0",
+    "dotenv": "^16.0.0"
+  }
+}
