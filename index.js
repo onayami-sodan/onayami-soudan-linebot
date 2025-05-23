@@ -1,13 +1,9 @@
+// index.js
 require("dotenv").config();
 const express = require("express");
 const line = require("@line/bot-sdk");
-const { createClient } = require("@supabase/supabase-js");
-
-// Supabaseクライアント初期化
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
+const { Configuration, OpenAIApi } = require("openai");
+const { supabase } = require("./supabaseClient");
 
 const app = express();
 
@@ -18,16 +14,15 @@ const config = {
 
 const client = new line.Client(config);
 
-// webhookルートには bodyParser を使わない（LINE署名検証のため）
 app.post("/webhook", line.middleware(config), async (req, res) => {
   try {
     const results = await Promise.all(
       req.body.events.map((event) => handleEvent(event))
     );
     res.json(results);
-  } catch (err) {
-    console.error("Webhookエラー:", err);
-    res.status(500).end();
+  } catch (error) {
+    console.error("Webhook error:", error);
+    res.status(500).send("Error");
   }
 });
 
@@ -37,33 +32,37 @@ async function handleEvent(event) {
   }
 
   const userId = event.source.userId;
+  const messageText = event.message.text;
+  console.log("\u{1F4AC} ユーザーID:", userId);
+  console.log("\u{1F4DD} メッセージ:", messageText);
 
-  // Supabaseからセッション回数取得
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("user_sessions")
     .select("count")
     .eq("user_id", userId)
     .single();
 
+  if (error) {
+    console.log("\u{1F6AB} SELECTエラー:", error);
+  }
+
   let count = data ? data.count + 1 : 1;
+  console.log("\u{1F4CB} Supabaseへ保存:", { user_id: userId, count });
+
+  await supabase.from("user_sessions").upsert({
+    user_id: userId,
+    count,
+  });
+
   let reply;
 
   if (count === 1) {
     reply = "こんにちは。今日はどんなお悩みですか？";
   } else if (count <= 5) {
-    reply = await callGPT(event.message.text);
+    reply = await callGPT(messageText);
   } else {
     reply =
-      "ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら→ https://note.com/○○○/n/note-password";
-  }
-
-  // Supabaseにカウントを保存/更新
-  const { error: upsertError } = await supabase
-    .from("user_sessions")
-    .upsert({ user_id: userId, count });
-
-  if (upsertError) {
-    console.error("UPSERエラー:", upsertError);
+      "ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password";
   }
 
   return client.replyMessage(event.replyToken, {
@@ -72,12 +71,33 @@ async function handleEvent(event) {
   });
 }
 
-// ダミーのGPT応答（本番ではAPI連携可能）
 async function callGPT(userMessage) {
-  return `「${userMessage}」についてですね。少し考えさせてください…`;
+  try {
+    const configuration = new Configuration({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+    const openai = new OpenAIApi(configuration);
+
+    const res = await openai.createChatCompletion({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "あなたは共感力の高い恋愛アドバイザーです。" },
+        { role: "user", content: userMessage },
+      ],
+    });
+
+    return res.data.choices[0].message.content.trim();
+  } catch (error) {
+    console.error("OpenAI error:", error);
+    return "すみません、いまはちょっとお答えできません...";
+  }
 }
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+app.get("/", (req, res) => {
+  res.send("OK");
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`\uD83D\uDE80 Server running on port ${PORT}`);
 });
