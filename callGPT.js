@@ -1,53 +1,43 @@
 // callGPT.js
 require('dotenv').config();
-const express = require('express');
-const { Configuration, OpenAIApi } = require('openai');
-const { middleware, Client } = require('@line/bot-sdk');
-const supabase = require('./supabaseClient');
+const { OpenAI } = require('openai');
 
-const app = express();
-const port = process.env.PORT || 3000;
-
-const lineConfig = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
-};
-
-const lineClient = new Client(lineConfig);
-
-const configuration = new Configuration({
+// OpenAIクライアントの初期化
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
-const openai = new OpenAIApi(configuration);
 
-app.post('/webhook', middleware(lineConfig), async (req, res) => {
-  const events = req.body.events;
-  const results = await Promise.all(events.map(handleEvent));
-  res.json(results);
-});
+/**
+ * 恋愛相談にやさしく応じるChatGPT応答
+ * @param {string} userMessage - ユーザーからの相談内容
+ * @returns {Promise<string>} - ChatGPTからのやさしい返信
+ */
+async function callChatGPT(userMessage) {
+  try {
+    const chatCompletion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: `あなたはやさしくて丁寧な恋愛相談員です。
+相手の気持ちに寄り添いながら、あたたかい励ましと共感を届けてください。
+言葉づかいはやわらかく、否定せずに安心感を与えるトーンで返答してください。
+堅苦しくならず、親しみやすさを意識してください。`,
+        },
+        {
+          role: 'user',
+          content: userMessage,
+        },
+      ],
+      temperature: 0.8,
+      max_tokens: 1000,
+    });
 
-async function handleEvent(event) {
-  if (event.type !== 'message' || event.message.type !== 'text') {
-    return null;
+    return chatCompletion.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('❌ OpenAIエラー:', error.message);
+    return 'ごめんね、今ちょっとお返事ができないみたい…。また少ししてから話しかけてくれたらうれしいな🌷';
   }
-
-  const userId = event.source.userId;
-  await supabase
-    .from('user_sessions')
-    .upsert({ user_id: userId }, { onConflict: ['user_id'] });
-
-  const completion = await openai.createChatCompletion({
-    model: 'gpt-3.5-turbo',
-    messages: [{ role: 'user', content: event.message.text }],
-  });
-
-  const answer = completion.data.choices[0].message.content.trim();
-  return lineClient.replyMessage(event.replyToken, {
-    type: 'text',
-    text: answer,
-  });
 }
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+module.exports = callChatGPT;
