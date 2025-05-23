@@ -1,7 +1,13 @@
 require("dotenv").config();
 const express = require("express");
 const line = require("@line/bot-sdk");
-const { supabase } = require("./supabaseClient");
+const { createClient } = require("@supabase/supabase-js");
+
+// Supabaseクライアント初期化
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 const app = express();
 
@@ -12,14 +18,17 @@ const config = {
 
 const client = new line.Client(config);
 
-// LINEミドルウェアは単独で設定（express.json() と併用しない）
+// webhookルートには bodyParser を使わない（LINE署名検証のため）
 app.post("/webhook", line.middleware(config), async (req, res) => {
-  const events = req.body.events;
-
-  console.log("🌟 受信イベント:", JSON.stringify(events, null, 2));
-
-  const results = await Promise.all(events.map((event) => handleEvent(event)));
-  res.json(results);
+  try {
+    const results = await Promise.all(
+      req.body.events.map((event) => handleEvent(event))
+    );
+    res.json(results);
+  } catch (err) {
+    console.error("Webhookエラー:", err);
+    res.status(500).end();
+  }
 });
 
 async function handleEvent(event) {
@@ -28,41 +37,33 @@ async function handleEvent(event) {
   }
 
   const userId = event.source.userId;
-  const userMessage = event.message.text;
 
-  console.log("📥 ユーザーID:", userId);
-  console.log("📨 メッセージ:", userMessage);
-
-  // Supabaseからカウント取得
-  const { data, error: selectError } = await supabase
+  // Supabaseからセッション回数取得
+  const { data, error } = await supabase
     .from("user_sessions")
     .select("count")
     .eq("user_id", userId)
     .single();
 
-  if (selectError && selectError.code !== "PGRST116") {
-    console.error("❌ SELECTエラー:", selectError);
-  }
-
   let count = data ? data.count + 1 : 1;
-
   let reply;
+
   if (count === 1) {
     reply = "こんにちは。今日はどんなお悩みですか？";
   } else if (count <= 5) {
-    reply = await callGPT(userMessage); // モック関数
+    reply = await callGPT(event.message.text);
   } else {
-    reply = `ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password`;
+    reply =
+      "ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら→ https://note.com/○○○/n/note-password";
   }
 
+  // Supabaseにカウントを保存/更新
   const { error: upsertError } = await supabase
     .from("user_sessions")
     .upsert({ user_id: userId, count });
 
   if (upsertError) {
-    console.error("❌ UPSERTエラー:", upsertError);
-  } else {
-    console.log("✅ Supabaseに保存:", { user_id: userId, count });
+    console.error("UPSERエラー:", upsertError);
   }
 
   return client.replyMessage(event.replyToken, {
@@ -71,13 +72,12 @@ async function handleEvent(event) {
   });
 }
 
-// モックのGPT応答
+// ダミーのGPT応答（本番ではAPI連携可能）
 async function callGPT(userMessage) {
-  return `なるほど…「${userMessage}」についてですね。詳しく聞かせてください。`;
+  return `「${userMessage}」についてですね。少し考えさせてください…`;
 }
 
-// Render環境に適応したポート設定
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
 });
