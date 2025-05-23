@@ -1,16 +1,9 @@
 {
-  "name": "onayami-soudan-linebot",
-  "version": "1.0.0",
-  "description": "LINEお悩み相談室",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
     "express": "^4.18.2",
-    "express-session": "^1.17.3",
-    "@line/bot-sdk": "^7.4.0",
-    "dotenv": "^16.3.1",
-    "@supabase/supabase-js": "^2.39.7"
+    "@line/bot-sdk": "^7.5.1",
+    "@supabase/supabase-js": "^2.39.5",
+    "openai": "^4.21.1",           ←★これが必要！
+    "dotenv": "^16.3.1"
   }
 }
