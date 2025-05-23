@@ -1,76 +1,80 @@
-// 必要なモジュールを読み込む
+// ✅ 完全版：LINEボット + ChatGPT API + Supabase セッション保存
+require('dotenv').config();
 const express = require('express');
-const line = require('@line/bot-sdk');
-const dotenv = require('dotenv');
+const { createClient } = require('@supabase/supabase-js');
 const { Configuration, OpenAIApi } = require('openai');
-const supabase = require('./supabaseClient');
+const line = require('@line/bot-sdk');
 
-// .envファイルの読み込み
-dotenv.config();
-
-// LINEチャネルの設定
-const config = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
-};
-
-// Expressアプリケーション作成
 const app = express();
-app.use(express.json());
+const port = process.env.PORT || 3000;
 
-// LINEのWebhookイベントハンドラ
-app.post('/webhook', line.middleware(config), async (req, res) => {
-  const events = req.body.events;
+// Supabase 初期化
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
-  // 複数イベントに対応
-  const results = await Promise.all(events.map(handleEvent));
-  res.json(results);
+// OpenAI 初期化
+const configuration = new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+const openai = new OpenAIApi(configuration);
+
+// LINE Bot設定
+const lineConfig = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
+};
+const lineClient = new line.Client(lineConfig);
+
+app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
+  Promise.all(req.body.events.map(handleEvent)).then((result) =>
+    res.json(result)
+  );
 });
 
-// イベント処理の本体
+// イベントハンドラー
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
-    return Promise.resolve(null);
+    return null;
   }
 
-  const userMessage = event.message.text;
   const userId = event.source.userId;
+  const userMessage = event.message.text;
 
-  // Supabaseにセッションを記録（任意）
-  await supabase
+  // セッションカウント取得・更新
+  const { data: existing, error } = await supabase
     .from('user_sessions')
-    .upsert({ user_id: userId, updated_at: new Date().toISOString() });
+    .select('*')
+    .eq('user_id', userId)
+    .single();
 
-  // OpenAI APIを呼び出す
-  const configuration = new Configuration({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
-  const openai = new OpenAIApi(configuration);
+  if (existing) {
+    await supabase
+      .from('user_sessions')
+      .update({ count: existing.count + 1 })
+      .eq('user_id', userId);
+  } else {
+    await supabase
+      .from('user_sessions')
+      .insert({ user_id: userId, count: 1 });
+  }
 
+  // ChatGPT API 呼び出し
   const completion = await openai.createChatCompletion({
     model: 'gpt-3.5-turbo',
-    messages: [
-      { role: 'user', content: userMessage }
-    ],
+    messages: [{ role: 'user', content: userMessage }],
   });
 
-  const aiReply = completion.data.choices[0].message.content;
+  const replyText = completion.data.choices[0].message.content.trim();
 
-  // LINEに返信する
-  const client = new line.Client(config);
-  return client.replyMessage(event.replyToken, {
+  // LINE に返信
+  return lineClient.replyMessage(event.replyToken, {
     type: 'text',
-    text: aiReply
+    text: replyText,
   });
 }
 
-// ポート番号はRenderが指定する環境変数を使う
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
-
-const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`🚀 Server running on port ${port}`);
 });
