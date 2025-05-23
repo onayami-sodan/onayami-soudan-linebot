@@ -5,7 +5,6 @@ const { supabase } = require("./supabaseClient");
 
 const app = express();
 
-// LINE Bot 設定
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -13,10 +12,13 @@ const config = {
 
 const client = new line.Client(config);
 
-// LINEの署名検証を最初に実行する
+// LINEミドルウェアは単独で設定（express.json() と併用しない）
 app.post("/webhook", line.middleware(config), async (req, res) => {
   const events = req.body.events;
-  const results = await Promise.all(events.map(handleEvent));
+
+  console.log("🌟 受信イベント:", JSON.stringify(events, null, 2));
+
+  const results = await Promise.all(events.map((event) => handleEvent(event)));
   res.json(results);
 });
 
@@ -26,7 +28,10 @@ async function handleEvent(event) {
   }
 
   const userId = event.source.userId;
-  console.log("ユーザーID:", userId);
+  const userMessage = event.message.text;
+
+  console.log("📥 ユーザーID:", userId);
+  console.log("📨 メッセージ:", userMessage);
 
   // Supabaseからカウント取得
   const { data, error: selectError } = await supabase
@@ -36,36 +41,28 @@ async function handleEvent(event) {
     .single();
 
   if (selectError && selectError.code !== "PGRST116") {
-    console.error("SELECTエラー:", selectError);
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: "内部エラーが発生しました。少し時間をおいて試してください。",
-    });
+    console.error("❌ SELECTエラー:", selectError);
   }
 
-  const count = data?.count ? data.count + 1 : 1;
-  console.log("現在のカウント:", count);
+  let count = data ? data.count + 1 : 1;
 
   let reply;
-
   if (count === 1) {
     reply = "こんにちは。今日はどんなお悩みですか？";
   } else if (count <= 5) {
-    reply = await callGPT(event.message.text);
+    reply = await callGPT(userMessage); // モック関数
   } else {
-    reply =
-      "ここから先は note の有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password";
+    reply = `ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password`;
   }
 
-  const { error: upsertError } = await supabase.from("user_sessions").upsert({
-    user_id: userId,
-    count: count,
-  });
+  const { error: upsertError } = await supabase
+    .from("user_sessions")
+    .upsert({ user_id: userId, count });
 
   if (upsertError) {
-    console.error("UPSERTエラー:", upsertError);
+    console.error("❌ UPSERTエラー:", upsertError);
   } else {
-    console.log(`Supabaseに保存: user_id=${userId}, count=${count}`);
+    console.log("✅ Supabaseに保存:", { user_id: userId, count });
   }
 
   return client.replyMessage(event.replyToken, {
@@ -74,17 +71,13 @@ async function handleEvent(event) {
   });
 }
 
-async function callGPT(message) {
-  // 今後 OpenAI 等と接続する場合はここに記述
-  return "なるほど…そのお悩み、よくありますよ。";
+// モックのGPT応答
+async function callGPT(userMessage) {
+  return `なるほど…「${userMessage}」についてですね。詳しく聞かせてください。`;
 }
 
+// Render環境に適応したポート設定
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
