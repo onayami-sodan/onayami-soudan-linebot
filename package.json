@@ -2,6 +2,7 @@
   "name": "onayami-soudan-linebot",
   "version": "1.0.0",
   "description": "お悩み相談LINEボット",
+  "type": "module",             ← ES Modules を有効化
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js"
@@ -10,9 +11,10 @@
     "node": ">=18.x"
   },
   "dependencies": {
+    "express": "^4.18.2",           ← ここを追加
+    "dotenv": "^16.0.0",
     "@line/bot-sdk": "^7.5.0",
     "@supabase/supabase-js": "^2.0.0",
-    "openai": "^4.5.0",
-    "dotenv": "^16.0.0"
+    "openai": "^4.5.0"
   }
 }
