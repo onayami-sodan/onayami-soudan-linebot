@@ -1,4 +1,3 @@
-// 必要なライブラリの読み込み
 require("dotenv").config();
 const express = require("express");
 const line = require("@line/bot-sdk");
@@ -12,6 +11,7 @@ const supabase = createClient(
 
 const app = express();
 
+// LINE設定
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -19,13 +19,17 @@ const config = {
 
 const client = new line.Client(config);
 
-app.use(express.json());
-
+// LINE専用Webhook（middlewareは必ず先に！）
 app.post("/webhook", line.middleware(config), async (req, res) => {
-  const results = await Promise.all(
-    req.body.events.map((event) => handleEvent(event))
-  );
-  res.json(results);
+  try {
+    const results = await Promise.all(
+      req.body.events.map((event) => handleEvent(event))
+    );
+    res.json(results);
+  } catch (err) {
+    console.error("エラー:", err);
+    res.status(500).end();
+  }
 });
 
 async function handleEvent(event) {
@@ -35,7 +39,7 @@ async function handleEvent(event) {
 
   const userId = event.source.userId;
 
-  // Supabaseから現在のカウントを取得
+  // セッションカウントを Supabase から取得
   const { data, error } = await supabase
     .from("user_sessions")
     .select("count")
@@ -48,17 +52,16 @@ async function handleEvent(event) {
   if (count === 1) {
     reply = "こんにちは。今日はどんなお悩みですか？";
   } else if (count <= 5) {
-    reply = await callGPT(event.message.text);
+    reply = await callGPT(event.message.text); // ←仮の返答関数
   } else {
     reply =
-      "ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら \u2192 https://note.com/○○○/n/note-password";
+      "ここから先はnoteの有料記事でご案内しています。\n今日のパスワードはこちら → https://note.com/○○○/n/note-password";
   }
 
-  // Supabaseへセッションデータを保存・更新
-  await supabase.from("user_sessions").upsert({
-    user_id: userId,
-    count,
-  });
+  // セッション情報をSupabaseへ保存/更新
+  await supabase
+    .from("user_sessions")
+    .upsert({ user_id: userId, count });
 
   return client.replyMessage(event.replyToken, {
     type: "text",
@@ -66,9 +69,11 @@ async function handleEvent(event) {
   });
 }
 
+// 仮の返答（必要なら GPT API に変更可）
 async function callGPT(userMessage) {
   return "なるほど…そのお悩み、よくありますよ。";
 }
 
-app.listen(3000);
-console.log("Server running on port 3000");
+app.listen(3000, () => {
+  console.log("🚀 Server running on port 3000");
+});
