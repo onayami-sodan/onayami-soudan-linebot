@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { messagingApi } = require('@line/bot-sdk');
-const OpenAI = require('openai'); // 🔄 v4ではこう書く
+const OpenAI = require('openai');
 const { supabase } = require('./supabaseClient');
 
 const app = express();
@@ -15,7 +15,7 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに変更してね
+const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに差し替えてね
 
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
@@ -30,40 +30,45 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text;
 
-        // 🔸 Supabaseからセッションカウントを取得・更新
+        // 🔸 Supabaseから履歴取得
         const { data: session, error } = await supabase
           .from('user_sessions')
-          .select('count')
+          .select('count, messages')
           .eq('user_id', userId)
           .single();
 
         let count = session?.count || 0;
-        count++;
+        let messages = session?.messages || [
+          {
+            role: 'system',
+            content: `あなたは恋愛に悩む人をやさしく支える相談員です。相手の気持ちを否定せず共感しながら、短く優しい言葉で、次の話題につなげる質問を1つ添えてください。話を終わらせず、自然な会話の流れを大切にしてください。`,
+          },
+        ];
 
-        await supabase.from('user_sessions').upsert({ user_id: userId, count });
+        // 会話履歴にユーザー発言追加
+        messages.push({ role: 'user', content: userMessage });
 
         let replyText = '';
 
-        if (count === 1) {
-          replyText = 'こんにちは🌸 今日どんな悩みがあるのかな？';
-        } else if (count >= 2 && count <= 5) {
+        if (count >= 5) {
+          replyText = `🌸お話を聞かせてくれてありがとう。\n続きはぜひこちらから読んでみてね：\n${NOTE_URL}`;
+        } else {
+          // ChatGPTへ問い合わせ
           const chatResponse = await openai.chat.completions.create({
             model: 'gpt-3.5-turbo',
-            messages: [
-              {
-                role: 'system',
-                content: 'あなたは恋愛や人間関係に悩む人に寄り添う、やさしい相談員です。共感と安心を大切にして、言葉を選んで返してください。',
-              },
-              {
-                role: 'user',
-                content: userMessage,
-              },
-            ],
+            messages,
           });
 
-          replyText = chatResponse.choices[0].message.content;
-        } else {
-          replyText = `🌸お話を聞かせてくれてありがとう。\n続きはぜひこちらで読んでみてね：\n${NOTE_URL}`;
+          const assistantMessage = chatResponse.choices[0].message;
+          messages.push({ role: 'assistant', content: assistantMessage.content });
+          replyText = assistantMessage.content;
+
+          // 🔸 Supabaseに履歴保存
+          await supabase.from('user_sessions').upsert({
+            user_id: userId,
+            count: count + 1,
+            messages,
+          });
         }
 
         // 🔸 LINEへ返信
