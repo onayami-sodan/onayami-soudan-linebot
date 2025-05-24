@@ -50,11 +50,19 @@ app.post('/webhook', async (req, res) => {
         let count = 0;
         let messages = [];
         let greeted = false;
+        let lastDate = today;
 
         if (session) {
-          count = session.count || 0;
           messages = session.messages || [];
           greeted = session.greeted || false;
+          lastDate = session.last_date || today;
+
+          // 日付が変わった場合はカウントだけリセット
+          if (lastDate !== today) {
+            count = 0;
+          } else {
+            count = session.count || 0;
+          }
         }
 
         console.log(`📊 現在のカウント: ${count}`);
