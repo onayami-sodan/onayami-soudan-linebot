@@ -17,12 +17,14 @@ const line = new messagingApi.MessagingApiClient({
 
 const NOTE_URL = 'https://note.com/your_note_link';
 
+// 日本時間の日付取得
 function getJapanDateString() {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   return jst.toISOString().slice(0, 10);
 }
 
+// 日替わりパスワード（非公開用）
 function generateDailyPassword() {
   const jst = new Date(new Date().getTime() + 9 * 60 * 60 * 1000);
   const seed = jst.toISOString().slice(0, 10);
@@ -118,8 +120,7 @@ app.post('/webhook', async (req, res) => {
             `たくさんお話してくれてありがとうね☺️\n` +
             `明日になれば、またお話しできるよ🥰\n` +
             `このまま続けるなら日替わりパスワードを取得してトークルームに入力してね☺️\n` +
-            `今日のパスワード 👉 ${todayPassword}\n` +
-            `パスワードの詳細はこちら 👉 ${NOTE_URL}`;
+            `👉 ${NOTE_URL}`; // ✅ パスワードを表示しない
         } else {
           if (count === 0 && messages.length === 0 && !greeted) {
             messages.push({
