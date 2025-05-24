@@ -38,7 +38,7 @@ app.post('/webhook', async (req, res) => {
         const userMessage = event.message.text;
         const today = getJapanDateString();
 
-        // セッション取得（+当日以外ならリセット）
+        // セッション取得
         let { data: session } = await supabase
           .from('user_sessions')
           .select('count, messages, last_date')
@@ -49,14 +49,8 @@ app.post('/webhook', async (req, res) => {
         let messages = [];
 
         if (session) {
-          if (session.last_date !== today) {
-            // 新しい日なのでリセット
-            count = 0;
-            messages = [];
-          } else {
-            count = session.count || 0;
-            messages = session.messages || [];
-          }
+          count = session.count || 0;
+          messages = session.messages || [];
         }
 
         let replyText = '';
@@ -85,7 +79,7 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
-        // 保存（カウント+1、今日の日付）
+        // 保存（カウント+1、last_dateは更新）
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
