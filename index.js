@@ -15,9 +15,8 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに変更してね
+const NOTE_URL = 'https://note.com/your_note_link';
 
-// JSTの"YYYY-MM-DD"を返す関数
 function getJapanDateString() {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
@@ -40,7 +39,6 @@ app.post('/webhook', async (req, res) => {
 
         console.log(`📩 [${today}] userId: ${userId}, message: ${userMessage}`);
 
-        // セッション取得
         let { data: session, error } = await supabase
           .from('user_sessions')
           .select('count, messages, last_date, greeted')
@@ -90,7 +88,6 @@ app.post('/webhook', async (req, res) => {
 
         console.log(`💬 Botの返答: ${replyText}`);
 
-        // 保存（カウント+1、last_dateとgreeted更新）
         const { error: saveError } = await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
@@ -101,7 +98,6 @@ app.post('/webhook', async (req, res) => {
 
         if (saveError) console.error('❌ Supabase 保存エラー:', saveError);
 
-        // LINEに返信
         await line.replyMessage({
           replyToken: event.replyToken,
           messages: [{ type: 'text', text: replyText }],
