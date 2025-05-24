@@ -15,13 +15,15 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに変更してね
+const NOTE_URL = 'https://note.com/your_note_link'; // ← あなたのnoteリンクに差し替えてね
 
-// 🌞 挨拶関数（時間によって変化）
+// ⏰ 日本時間で挨拶を返す関数
 function getGreeting() {
-  const hour = new Date().getHours();
-  if (hour < 10) return 'おはよう☀️';
-  if (hour < 18) return 'こんにちは🌸';
+  const now = new Date();
+  const jstHour = (now.getUTCHours() + 9) % 24;
+
+  if (jstHour < 10) return 'おはよう☀️';
+  if (jstHour < 18) return 'こんにちは🌸';
   return 'こんばんは🌙';
 }
 
@@ -38,7 +40,7 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text;
 
-        // Supabaseから会話履歴を取得
+        // Supabaseからセッション情報取得
         const { data: session } = await supabase
           .from('user_sessions')
           .select('count, messages')
@@ -50,16 +52,18 @@ app.post('/webhook', async (req, res) => {
 
         let replyText = '';
 
-        // 🔹 1ターン目のあいさつ（時間で変化）
+        // 🔸 1ターン目：時間ごとのあいさつ
         if (count === 0) {
           const greeting = getGreeting();
           replyText = `${greeting} 今日どんな悩みがあるのかな？`;
         }
-        // 🔹 6ターン目以降はnote誘導
-        else if (count >= 5) {
-          replyText = `🌸お話を聞かせてくれてありがとう。\n続きはぜひこちらで読んでみてね：\n${NOTE_URL}`;
+
+        // 🔸 10ターン目以降：note誘導
+        else if (count >= 9) {
+          replyText = `🌸たくさんお話してくれてありがとう。\n続きはぜひこちらで読んでみてね：\n${NOTE_URL}`;
         }
-        // 🔹 2〜5ターン目：会話対応
+
+        // 🔸 2〜9ターン目：ChatGPTとの会話
         else {
           if (messages.length === 0) {
             messages.push({
@@ -71,7 +75,7 @@ app.post('/webhook', async (req, res) => {
           messages.push({ role: 'user', content: userMessage });
 
           const chatResponse = await openai.chat.completions.create({
-            model: 'gpt-4o', // ← ここがポイント！
+            model: 'gpt-4o',
             messages,
           });
 
@@ -81,14 +85,14 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
-        // Supabaseに保存（ターン数 +1）
+        // 🔸 Supabaseにセッション情報保存（カウント＋1）
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
           messages,
         });
 
-        // LINEに返事
+        // 🔸 LINEに返信
         await line.replyMessage({
           replyToken: event.replyToken,
           messages: [{ type: 'text', text: replyText }],
