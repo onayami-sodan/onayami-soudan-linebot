@@ -15,7 +15,7 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに差し替えてね
+const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに変更してね
 
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
@@ -45,15 +45,16 @@ app.post('/webhook', async (req, res) => {
           },
         ];
 
-        // 会話履歴にユーザー発言追加
+        count++; // ← 最初にカウントを増やす
         messages.push({ role: 'user', content: userMessage });
 
         let replyText = '';
 
-        if (count >= 5) {
+        if (count === 1) {
+          replyText = 'こんにちは🌸 今日どんな悩みがあるのかな？';
+        } else if (count >= 6) {
           replyText = `🌸お話を聞かせてくれてありがとう。\n続きはぜひこちらから読んでみてね：\n${NOTE_URL}`;
         } else {
-          // ChatGPTへ問い合わせ
           const chatResponse = await openai.chat.completions.create({
             model: 'gpt-3.5-turbo',
             messages,
@@ -62,14 +63,14 @@ app.post('/webhook', async (req, res) => {
           const assistantMessage = chatResponse.choices[0].message;
           messages.push({ role: 'assistant', content: assistantMessage.content });
           replyText = assistantMessage.content;
-
-          // 🔸 Supabaseに履歴保存
-          await supabase.from('user_sessions').upsert({
-            user_id: userId,
-            count: count + 1,
-            messages,
-          });
         }
+
+        // 🔸 Supabaseに履歴保存
+        await supabase.from('user_sessions').upsert({
+          user_id: userId,
+          count,
+          messages,
+        });
 
         // 🔸 LINEへ返信
         await line.replyMessage({
