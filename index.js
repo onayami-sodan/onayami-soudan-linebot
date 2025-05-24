@@ -15,14 +15,14 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-const NOTE_URL = 'https://note.com/your_note_link'; // ← あなたのnoteリンクに差し替えてね
+const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに差し替えてね
 
-// ⏰ 日本時間で挨拶を返す関数
+// ⏰ 日本時間でやさしい挨拶を返す関数
 function getGreeting() {
   const now = new Date();
   const jstHour = (now.getUTCHours() + 9) % 24;
 
-  if (jstHour < 10) return 'おはよう☀️';
+  if (jstHour < 10) return 'おはようございます☀️';
   if (jstHour < 18) return 'こんにちは🌸';
   return 'こんばんは🌙';
 }
@@ -40,7 +40,6 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text;
 
-        // Supabaseからセッション情報取得
         const { data: session } = await supabase
           .from('user_sessions')
           .select('count, messages')
@@ -52,23 +51,23 @@ app.post('/webhook', async (req, res) => {
 
         let replyText = '';
 
-        // 🔸 1ターン目：時間ごとのあいさつ
+        // 🌸 1ターン目のあいさつ（日本時間対応）
         if (count === 0) {
           const greeting = getGreeting();
-          replyText = `${greeting} 今日どんな悩みがあるのかな？`;
+          replyText = `${greeting}、はじめまして♪\nどんなことが気になっているのかな？よかったら、お話してみてね🍀`;
         }
 
-        // 🔸 10ターン目以降：note誘導
+        // 🌸 10ターン目以降：note誘導（やさしい語り口）
         else if (count >= 9) {
-          replyText = `🌸たくさんお話してくれてありがとう。\n続きはぜひこちらで読んでみてね：\n${NOTE_URL}`;
+          replyText = `たくさんお話してくれてありがとうね☺️\nよかったら、続きをこちらで読んでみてね…\n${NOTE_URL}`;
         }
 
-        // 🔸 2〜9ターン目：ChatGPTとの会話
+        // 🌸 2〜9ターン目：やさしい相談スタイル
         else {
           if (messages.length === 0) {
             messages.push({
               role: 'system',
-              content: `あなたは恋愛や人間関係に悩む人をやさしく支える相談員です。相手の気持ちを否定せず共感しながら、短くやさしい言葉で、次の話題につながる質問を添えてください。話を終わらせず、自然な会話の流れを大切にしてください。`,
+              content: `あなたは30歳くらいの、やさしくておっとりした女性相談員です。話し相手の気持ちに寄り添いながら、ふわっとやわらかい口調で返してください。決してきつい言い方はせず、質問の形で会話が続くようにしてください。かわいらしく、安心感のある雰囲気を大切にしてください。`,
             });
           }
 
@@ -85,14 +84,14 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
-        // 🔸 Supabaseにセッション情報保存（カウント＋1）
+        // 🔸 Supabaseに保存
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
           messages,
         });
 
-        // 🔸 LINEに返信
+        // 🔸 LINEへ返信
         await line.replyMessage({
           replyToken: event.replyToken,
           messages: [{ type: 'text', text: replyText }],
