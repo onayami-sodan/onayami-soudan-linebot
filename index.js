@@ -41,16 +41,18 @@ app.post('/webhook', async (req, res) => {
         // セッション取得
         let { data: session } = await supabase
           .from('user_sessions')
-          .select('count, messages, last_date')
+          .select('count, messages, last_date, greeted')
           .eq('user_id', userId)
           .single();
 
         let count = 0;
         let messages = [];
+        let greeted = false;
 
         if (session) {
           count = session.count || 0;
           messages = session.messages || [];
+          greeted = session.greeted || false;
         }
 
         let replyText = '';
@@ -58,12 +60,13 @@ app.post('/webhook', async (req, res) => {
         if (count >= 6) {
           replyText = `たくさんお話してくれてありがとうね☺️\nよかったら、続きをこちらで読んでみてね…\n${NOTE_URL}`;
         } else {
-          if (count === 0 && messages.length === 0) {
+          if (count === 0 && messages.length === 0 && !greeted) {
             messages.push({
               role: 'system',
               content:
                 'あなたは30歳くらいの、やさしくておっとりした女性相談員です。話し相手の気持ちに寄り添いながら、ふわっとやわらかい口調で返してください。決してきつい言い方はせず、質問の形で会話が続くようにしてください。かわいらしく、安心感のある雰囲気を大切にしてください。',
             });
+            greeted = true;
           }
 
           messages.push({ role: 'user', content: userMessage });
@@ -79,12 +82,13 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
-        // 保存（カウント+1、last_dateは更新）
+        // 保存（カウント+1、last_dateとgreeted更新）
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
           messages,
           last_date: today,
+          greeted,
         });
 
         // LINEに返信
