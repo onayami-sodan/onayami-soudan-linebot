@@ -17,6 +17,14 @@ const line = new messagingApi.MessagingApiClient({
 
 const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに変更してね
 
+// 🌞 挨拶関数（時間によって変化）
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 10) return 'おはよう☀️';
+  if (hour < 18) return 'こんにちは🌸';
+  return 'こんばんは🌙';
+}
+
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
 
@@ -30,89 +38,33 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text;
 
-        // セッション取得
-        const { data: session, error } = await supabase
+        // Supabaseから会話履歴を取得
+        const { data: session } = await supabase
           .from('user_sessions')
-          .select('count, messages, age_group, topic')
+          .select('count, messages')
           .eq('user_id', userId)
           .single();
 
         const count = session?.count || 0;
         let messages = session?.messages || [];
 
-        let age_group = session?.age_group || null;
-        let topic = session?.topic || null;
-
         let replyText = '';
 
-        // ステップ①：年齢を聞く
-        if (!age_group) {
-          const agePattern = /([1-9][0-9])代|([1-9][0-9])歳/;
-          const match = userMessage.match(agePattern);
-
-          if (match) {
-            const age = parseInt(match[1] || match[2]);
-            if (age < 20) age_group = '10代';
-            else if (age < 30) age_group = '20代';
-            else if (age < 40) age_group = '30代';
-            else if (age < 50) age_group = '40代';
-            else if (age < 60) age_group = '50代';
-            else age_group = '60代以上';
-
-            replyText = `ありがとう🌸 次に、どんなことについて悩んでるか教えてね。\n「恋愛・家族・職場・友人・孤独感」などから選んでね。`;
-          } else {
-            replyText = 'まず、あなたのご年齢を教えてもらってもいいかな？（例：「30代」「25歳」など）';
-          }
-
-          await supabase.from('user_sessions').upsert({
-            user_id: userId,
-            count: count + 1,
-            age_group,
-            topic,
-            messages,
-          });
-
-          await line.replyMessage({
-            replyToken: event.replyToken,
-            messages: [{ type: 'text', text: replyText }],
-          });
-          continue;
+        // 🔹 1ターン目のあいさつ（時間で変化）
+        if (count === 0) {
+          const greeting = getGreeting();
+          replyText = `${greeting} 今日どんな悩みがあるのかな？`;
         }
-
-        // ステップ②：トピック選択
-        if (!topic) {
-          const validTopics = ['恋愛', '家族', '職場', '友人', '孤独感'];
-          if (validTopics.includes(userMessage)) {
-            topic = userMessage;
-            replyText = `わかったよ🌷それじゃ、${topic}のことで今いちばん気になってることを聞かせてね。`;
-          } else {
-            replyText = '「恋愛・家族・職場・友人・孤独感」から選んでね🌸';
-          }
-
-          await supabase.from('user_sessions').upsert({
-            user_id: userId,
-            count: count + 1,
-            age_group,
-            topic,
-            messages,
-          });
-
-          await line.replyMessage({
-            replyToken: event.replyToken,
-            messages: [{ type: 'text', text: replyText }],
-          });
-          continue;
+        // 🔹 6ターン目以降はnote誘導
+        else if (count >= 5) {
+          replyText = `🌸お話を聞かせてくれてありがとう。\n続きはぜひこちらで読んでみてね：\n${NOTE_URL}`;
         }
-
-        // ステップ③：通常の会話
-        if (count >= 5) {
-          replyText = `🌸お話を聞かせてくれてありがとう。\n続きはぜひこちらから読んでみてね：\n${NOTE_URL}`;
-        } else {
-          // 最初にプロンプトを追加
+        // 🔹 2〜5ターン目：会話対応
+        else {
           if (messages.length === 0) {
             messages.push({
               role: 'system',
-              content: `あなたは${age_group}の方の${topic}の悩みにやさしく寄り添う相談員です。共感を大切にしながら、短くやさしい言葉で次の話題につながる質問を添えてください。アドバイスよりも気持ちの理解を優先してください。`,
+              content: `あなたは恋愛や人間関係に悩む人をやさしく支える相談員です。相手の気持ちを否定せず共感しながら、短くやさしい言葉で、次の話題につながる質問を添えてください。話を終わらせず、自然な会話の流れを大切にしてください。`,
             });
           }
 
@@ -129,16 +81,14 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
-        // セッション保存
+        // Supabaseに保存（ターン数 +1）
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
-          age_group,
-          topic,
           messages,
         });
 
-        // 返信送信
+        // LINEに返事
         await line.replyMessage({
           replyToken: event.replyToken,
           messages: [{ type: 'text', text: replyText }],
