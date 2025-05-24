@@ -1,8 +1,7 @@
-// index.js
 require('dotenv').config();
 const express = require('express');
 const { messagingApi } = require('@line/bot-sdk');
-const { OpenAI } = require('openai');
+const OpenAI = require('openai'); // 🔄 v4ではこう書く
 const { supabase } = require('./supabaseClient');
 
 const app = express();
@@ -85,4 +84,3 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`✅ LINEボットがポート ${port} で起動中`);
 });
-
