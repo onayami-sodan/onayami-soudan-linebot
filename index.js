@@ -41,7 +41,7 @@ app.post('/webhook', async (req, res) => {
 
         let { data: session, error } = await supabase
           .from('user_sessions')
-          .select('count, messages, last_date, greeted')
+          .select('count, messages, last_date, greeted, noted')
           .eq('user_id', userId)
           .single();
 
@@ -51,13 +51,14 @@ app.post('/webhook', async (req, res) => {
         let messages = [];
         let greeted = false;
         let lastDate = today;
+        let noted = false;
 
         if (session) {
           messages = session.messages || [];
           greeted = session.greeted || false;
           lastDate = session.last_date || today;
+          noted = session.noted || false;
 
-          // 日付が変わった場合はカウントだけリセット
           if (lastDate !== today) {
             count = 0;
           } else {
@@ -65,12 +66,15 @@ app.post('/webhook', async (req, res) => {
           }
         }
 
-        console.log(`📊 現在のカウント: ${count}`);
+        console.log(`📊 現在のカウント: ${count}, noted: ${noted}`);
 
         let replyText = '';
+        let newCount = count;
+        let newNoted = noted;
 
-        if (count >= 6) {
+        if (count >= 6 || noted === true) {
           replyText = `たくさんお話してくれてありがとうね☺️\nよかったら、続きをこちらで読んでみてね…\n${NOTE_URL}`;
+          newNoted = true; // 1回だけnote案内
         } else {
           if (count === 0 && messages.length === 0 && !greeted) {
             messages.push({
@@ -92,16 +96,18 @@ app.post('/webhook', async (req, res) => {
           messages.push({ role: 'assistant', content: assistantMessage.content });
 
           replyText = assistantMessage.content;
+          newCount = count + 1;
         }
 
         console.log(`💬 Botの返答: ${replyText}`);
 
         const { error: saveError } = await supabase.from('user_sessions').upsert({
           user_id: userId,
-          count: count + 1,
+          count: newCount,
           messages,
           last_date: today,
           greeted,
+          noted: newNoted,
         });
 
         if (saveError) console.error('❌ Supabase 保存エラー:', saveError);
