@@ -67,16 +67,15 @@ app.post('/webhook', async (req, res) => {
         console.log(`📊 現在のカウント: ${count}`);
 
         let replyText = '';
-        let newCount = count;
+        let newCount = count + 1;
 
+        // 🌸 7ターン目以降（count >= 6）は毎回note案内
         if (count >= 6) {
-          // 🌸 7回目以降：毎回note案内をやさしく返す
           replyText =
             `たくさんお話してくれてありがとうね☺️\n` +
             `明日になれば、またお話しできるよ🥰\n` +
             `このまま続けるなら日替わりパスワードを取得してトークルームに入力してね☺️\n` +
             `パスワードはこちら👉${NOTE_URL}`;
-          newCount = count + 1;
         } else {
           // 🧸 初回だけ system プロンプト追加
           if (count === 0 && messages.length === 0 && !greeted) {
@@ -99,11 +98,11 @@ app.post('/webhook', async (req, res) => {
           messages.push({ role: 'assistant', content: assistantMessage.content });
 
           replyText = assistantMessage.content;
-          newCount = count + 1;
         }
 
         console.log(`💬 Botの返答: ${replyText}`);
 
+        // 📌 Supabaseに保存（countは必ず+1して記録）
         const { error: saveError } = await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: newCount,
