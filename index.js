@@ -17,26 +17,29 @@ const line = new messagingApi.MessagingApiClient({
 
 const NOTE_URL = 'https://note.com/your_note_link';
 
-// 🇯🇵 日本時間の日付
+// 日本時間の日付を取得
 function getJapanDateString() {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   return jst.toISOString().slice(0, 10);
 }
 
-// 🎲 日替わりパスワードを日本時間でランダム生成
+// 毎日同じパスワードを生成（日付をシードにして固定）
 function generateDailyPassword() {
   const jst = new Date(new Date().getTime() + 9 * 60 * 60 * 1000);
-  const seed = jst.toISOString().slice(0, 10);
+  const seed = jst.toISOString().slice(0, 10); // 例："2025-05-24"
+
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
     hash = seed.charCodeAt(i) + ((hash << 5) - hash);
   }
+
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let password = '';
   for (let i = 0; i < 6; i++) {
     password += chars.charAt(Math.abs((hash + i * 17) % chars.length));
   }
+
   return password;
 }
 
@@ -79,7 +82,6 @@ app.post('/webhook', async (req, res) => {
           authenticated = session.authenticated || false;
           authDate = session.auth_date || null;
 
-          // 日付が変わったらカウントと認証をリセット
           if (lastDate !== today) {
             count = 0;
             authenticated = false;
@@ -89,7 +91,7 @@ app.post('/webhook', async (req, res) => {
           }
         }
 
-        // 🔐 パスワード認証
+        // パスワード一致 → 認証
         if (userMessage === todayPassword) {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
@@ -116,8 +118,8 @@ app.post('/webhook', async (req, res) => {
         let replyText = '';
         let newCount = count + 1;
 
+        // 認証されていない＆6回以上ならnote案内
         if (!authenticated && count >= 6) {
-          // ❌ 未認証かつ6回目を超えたらnote誘導
           replyText =
             `たくさんお話してくれてありがとうね☺️\n` +
             `明日になれば、またお話しできるよ🥰\n` +
@@ -125,7 +127,6 @@ app.post('/webhook', async (req, res) => {
             `今日のパスワード👉 ${todayPassword}\n` +
             `パスワードの詳細はこちら👉 ${NOTE_URL}`;
         } else {
-          // 🧸 初回systemプロンプト
           if (count === 0 && messages.length === 0 && !greeted) {
             messages.push({
               role: 'system',
