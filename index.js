@@ -15,16 +15,13 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに差し替えてね
+const NOTE_URL = 'https://note.com/your_note_link'; // ← たっくんのnoteリンクに変更してね
 
-// ⏰ 日本時間でやさしい挨拶を返す関数
-function getGreeting() {
+// JSTの"YYYY-MM-DD"を返す関数
+function getJapanDateString() {
   const now = new Date();
-  const jstHour = (now.getUTCHours() + 9) % 24;
-
-  if (jstHour < 10) return 'おはようございます☀️';
-  if (jstHour < 18) return 'こんにちは🌸';
-  return 'こんばんは🌙';
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  return jst.toISOString().slice(0, 10);
 }
 
 app.post('/webhook', async (req, res) => {
@@ -39,35 +36,39 @@ app.post('/webhook', async (req, res) => {
       if (event.type === 'message' && event.message.type === 'text') {
         const userId = event.source.userId;
         const userMessage = event.message.text;
+        const today = getJapanDateString();
 
-        const { data: session } = await supabase
+        // セッション取得（+当日以外ならリセット）
+        let { data: session } = await supabase
           .from('user_sessions')
-          .select('count, messages')
+          .select('count, messages, last_date')
           .eq('user_id', userId)
           .single();
 
-        const count = session?.count || 0;
-        let messages = session?.messages || [];
+        let count = 0;
+        let messages = [];
+
+        if (session) {
+          if (session.last_date !== today) {
+            // 新しい日なのでリセット
+            count = 0;
+            messages = [];
+          } else {
+            count = session.count || 0;
+            messages = session.messages || [];
+          }
+        }
 
         let replyText = '';
 
-        // 🌸 1ターン目のあいさつ（日本時間対応）
-        if (count === 0) {
-          const greeting = getGreeting();
-          replyText = `${greeting}、はじめまして♪\nどんなことが気になっているのかな？よかったら、お話してみてね🍀`;
-        }
-
-        // 🌸 10ターン目以降：note誘導（やさしい語り口）
-        else if (count >= 9) {
+        if (count >= 6) {
           replyText = `たくさんお話してくれてありがとうね☺️\nよかったら、続きをこちらで読んでみてね…\n${NOTE_URL}`;
-        }
-
-        // 🌸 2〜9ターン目：やさしい相談スタイル
-        else {
-          if (messages.length === 0) {
+        } else {
+          if (count === 0 && messages.length === 0) {
             messages.push({
               role: 'system',
-              content: `あなたは30歳くらいの、やさしくておっとりした女性相談員です。話し相手の気持ちに寄り添いながら、ふわっとやわらかい口調で返してください。決してきつい言い方はせず、質問の形で会話が続くようにしてください。かわいらしく、安心感のある雰囲気を大切にしてください。`,
+              content:
+                'あなたは30歳くらいの、やさしくておっとりした女性相談員です。話し相手の気持ちに寄り添いながら、ふわっとやわらかい口調で返してください。決してきつい言い方はせず、質問の形で会話が続くようにしてください。かわいらしく、安心感のある雰囲気を大切にしてください。',
             });
           }
 
@@ -84,14 +85,15 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
-        // 🔸 Supabaseに保存
+        // 保存（カウント+1、今日の日付）
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
           messages,
+          last_date: today,
         });
 
-        // 🔸 LINEへ返信
+        // LINEに返信
         await line.replyMessage({
           replyToken: event.replyToken,
           messages: [{ type: 'text', text: replyText }],
