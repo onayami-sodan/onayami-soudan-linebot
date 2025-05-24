@@ -41,7 +41,7 @@ app.post('/webhook', async (req, res) => {
 
         let { data: session, error } = await supabase
           .from('user_sessions')
-          .select('count, messages, last_date, greeted, noted')
+          .select('count, messages, last_date, greeted')
           .eq('user_id', userId)
           .single();
 
@@ -51,13 +51,11 @@ app.post('/webhook', async (req, res) => {
         let messages = [];
         let greeted = false;
         let lastDate = today;
-        let noted = false;
 
         if (session) {
           messages = session.messages || [];
           greeted = session.greeted || false;
           lastDate = session.last_date || today;
-          noted = session.noted || false;
 
           if (lastDate !== today) {
             count = 0;
@@ -66,16 +64,21 @@ app.post('/webhook', async (req, res) => {
           }
         }
 
-        console.log(`📊 現在のカウント: ${count}, noted: ${noted}`);
+        console.log(`📊 現在のカウント: ${count}`);
 
         let replyText = '';
         let newCount = count;
-        let newNoted = noted;
 
-        if (count >= 6 || noted === true) {
-          replyText = `たくさんお話してくれてありがとうね☺️\nよかったら、続きをこちらで読んでみてね…\n${NOTE_URL}`;
-          newNoted = true; // 1回だけnote案内
+        if (count >= 6) {
+          // 🌸 7回目以降：毎回note案内をやさしく返す
+          replyText =
+            `たくさんお話してくれてありがとうね☺️\n` +
+            `明日になれば、またお話しできるよ🥰\n` +
+            `このまま続けるなら日替わりパスワードを取得してトークルームに入力してね☺️\n` +
+            `パスワードはこちら👉${NOTE_URL}`;
+          newCount = count + 1;
         } else {
+          // 🧸 初回だけ system プロンプト追加
           if (count === 0 && messages.length === 0 && !greeted) {
             messages.push({
               role: 'system',
@@ -107,7 +110,6 @@ app.post('/webhook', async (req, res) => {
           messages,
           last_date: today,
           greeted,
-          noted: newNoted,
         });
 
         if (saveError) console.error('❌ Supabase 保存エラー:', saveError);
@@ -129,4 +131,3 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`✅ LINEボットがポート ${port} で起動中`);
 });
-
