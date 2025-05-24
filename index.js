@@ -17,29 +17,24 @@ const line = new messagingApi.MessagingApiClient({
 
 const NOTE_URL = 'https://note.com/your_note_link';
 
-// 日本時間の日付取得
 function getJapanDateString() {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   return jst.toISOString().slice(0, 10);
 }
 
-// 毎日同じランダムパスワードを生成
 function generateDailyPassword() {
   const jst = new Date(new Date().getTime() + 9 * 60 * 60 * 1000);
-  const seed = jst.toISOString().slice(0, 10); // "YYYY-MM-DD"
-
+  const seed = jst.toISOString().slice(0, 10);
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
     hash = seed.charCodeAt(i) + ((hash << 5) - hash);
   }
-
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let password = '';
   for (let i = 0; i < 6; i++) {
     password += chars.charAt(Math.abs((hash + i * 17) % chars.length));
   }
-
   return password;
 }
 
@@ -50,7 +45,6 @@ app.post('/webhook', async (req, res) => {
     return res.status(200).send("No events");
   }
 
-  // パスワードは1日1回だけ生成して共通で使う！
   const today = getJapanDateString();
   const todayPassword = generateDailyPassword();
 
@@ -59,6 +53,9 @@ app.post('/webhook', async (req, res) => {
       if (event.type === 'message' && event.message.type === 'text') {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
+
+        console.log(`📩 [${today}] userId: ${userId}, message: ${userMessage}`);
+        console.log(`🔐 認証チェック: 入力=${userMessage}, 正解=${todayPassword}`);
 
         let { data: session, error } = await supabase
           .from('user_sessions')
@@ -91,7 +88,7 @@ app.post('/webhook', async (req, res) => {
           }
         }
 
-        // 🔐 認証パスワードチェック
+        // ✅ パスワード認証成功時
         if (userMessage === todayPassword) {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
@@ -105,12 +102,10 @@ app.post('/webhook', async (req, res) => {
 
           await line.replyMessage({
             replyToken: event.replyToken,
-            messages: [
-              {
-                type: 'text',
-                text: `パスワード認証できたよ☺️\n今日は回数制限なしで、ゆっくりお話ししようね💕`,
-              },
-            ],
+            messages: [{
+              type: 'text',
+              text: `パスワード認証できたよ☺️\n今日は回数制限なしで、ゆっくりお話ししようね💕`
+            }],
           });
           continue;
         }
@@ -118,16 +113,14 @@ app.post('/webhook', async (req, res) => {
         let replyText = '';
         let newCount = count + 1;
 
-        // 🚫 未認証かつ6回以上 → note誘導
         if (!authenticated && count >= 6) {
           replyText =
             `たくさんお話してくれてありがとうね☺️\n` +
             `明日になれば、またお話しできるよ🥰\n` +
             `このまま続けるなら日替わりパスワードを取得してトークルームに入力してね☺️\n` +
-            `今日のパスワード👉 ${todayPassword}\n` +
-            `パスワードの詳細はこちら👉 ${NOTE_URL}`;
+            `今日のパスワード 👉 ${todayPassword}\n` +
+            `パスワードの詳細はこちら 👉 ${NOTE_URL}`;
         } else {
-          // 初回のみSystemプロンプト
           if (count === 0 && messages.length === 0 && !greeted) {
             messages.push({
               role: 'system',
@@ -152,7 +145,6 @@ app.post('/webhook', async (req, res) => {
 
         console.log(`💬 Botの返答: ${replyText}`);
 
-        // 📝 Supabaseへ保存
         const { error: saveError } = await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: newCount,
