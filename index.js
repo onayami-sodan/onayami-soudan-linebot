@@ -38,12 +38,16 @@ app.post('/webhook', async (req, res) => {
         const userMessage = event.message.text;
         const today = getJapanDateString();
 
+        console.log(`📩 [${today}] userId: ${userId}, message: ${userMessage}`);
+
         // セッション取得
-        let { data: session } = await supabase
+        let { data: session, error } = await supabase
           .from('user_sessions')
           .select('count, messages, last_date, greeted')
           .eq('user_id', userId)
           .single();
+
+        if (error) console.error('❌ Supabase セッション取得エラー:', error);
 
         let count = 0;
         let messages = [];
@@ -54,6 +58,8 @@ app.post('/webhook', async (req, res) => {
           messages = session.messages || [];
           greeted = session.greeted || false;
         }
+
+        console.log(`📊 現在のカウント: ${count}`);
 
         let replyText = '';
 
@@ -82,14 +88,18 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
+        console.log(`💬 Botの返答: ${replyText}`);
+
         // 保存（カウント+1、last_dateとgreeted更新）
-        await supabase.from('user_sessions').upsert({
+        const { error: saveError } = await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
           messages,
           last_date: today,
           greeted,
         });
+
+        if (saveError) console.error('❌ Supabase 保存エラー:', saveError);
 
         // LINEに返信
         await line.replyMessage({
