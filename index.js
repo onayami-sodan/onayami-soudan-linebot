@@ -106,7 +106,7 @@ app.post('/webhook', async (req, res) => {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
             count,
-            messages,
+            messages.slice(-6),
             last_date: today,
             greeted,
             authenticated: true,
@@ -198,3 +198,4 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`✅ LINEボットがポート ${port} で起動中`);
 });
+
