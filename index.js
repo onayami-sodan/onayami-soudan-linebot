@@ -1,4 +1,4 @@
-// たっくんLINE Bot：管理者用パスワード確認付き（azu1228） 完全版＋note連携バージョン
+// たっくんLINE Bot：note連携＆管理者認証 修正済みフルコード✨
 
 require('dotenv').config();
 const express = require('express');
@@ -19,18 +19,13 @@ const line = new messagingApi.MessagingApiClient({
 
 const ADMIN_SECRET = 'azu1228';
 
-const passwordList = [
-  'neko12', 'momo34', 'yume56', 'riri07', 'nana22', 'hono11',
-  'koko88', 'rara15', 'chuu33', 'mimi19', 'luna28', 'peko13',
-  'yuki09', 'toto77', 'puni45', 'kiki01', 'susu66', 'hime03',
-  'pipi17', 'coco29', 'roro04', 'momo99', 'nana73', 'lulu21',
-  'meme62', 'popo55', 'koro26', 'chibi8', 'mimi44', 'lala18', 'fufu31'
-];
-
 const noteList = [
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
   { password: 'momo34', url: 'https://note.com/noble_loris1361/n/nfbd564d7f9fb' },
   { password: 'yume56', url: 'https://note.com/noble_loris1361/n/ndb8877c2b1b6' },
+  { password: 'meme62', url: 'https://note.com/noble_loris1361/n/nabcde1234567' },
+  { password: 'riri07', url: 'https://note.com/noble_loris1361/n/nriri07123456' },
+  // 必要に応じて続けてね♪
 ];
 
 function getJapanDateString() {
@@ -51,8 +46,6 @@ app.post('/webhook', async (req, res) => {
 
   const today = getJapanDateString();
   const todayNote = getTodayNote();
-  const dayIndex = (new Date(today).getDate() - 1) % passwordList.length;
-  const todayPassword = passwordList[dayIndex];
 
   for (const event of events) {
     try {
@@ -60,14 +53,14 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
 
-        // 管理者モード：合言葉確認コマンド
+        // 🌟 管理者認証モード
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
             replyToken: event.replyToken,
             messages: [
               {
                 type: 'text',
-                text: `\u2728 管理者モード\n本日(${today})のnoteパスワードは「${todayPassword}」です\nURL：${todayNote.url}`,
+                text: `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」です\nURL：${todayNote.url}`,
               },
             ],
           });
@@ -105,7 +98,7 @@ app.post('/webhook', async (req, res) => {
           }
         }
 
-        // 🔐 パスワード認証処理（note連携）
+        // 🔐 合言葉認証
         if (userMessage === todayNote.password) {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
