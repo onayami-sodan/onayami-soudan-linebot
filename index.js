@@ -1,4 +1,4 @@
-// たっくんLINE Bot：note連携＆管理者認証 修正済みフルコード✨
+// たっくんLINE Bot：note連携＆管理者認証 安定版パスワード🌼
 
 require('dotenv').config();
 const express = require('express');
@@ -25,7 +25,7 @@ const noteList = [
   { password: 'yume56', url: 'https://note.com/noble_loris1361/n/ndb8877c2b1b6' },
   { password: 'meme62', url: 'https://note.com/noble_loris1361/n/nabcde1234567' },
   { password: 'riri07', url: 'https://note.com/noble_loris1361/n/nriri07123456' },
-  // 必要に応じて続けてね♪
+  // 必要に応じて追加してね！
 ];
 
 function getJapanDateString() {
@@ -34,9 +34,14 @@ function getJapanDateString() {
   return jst.toISOString().slice(0, 10);
 }
 
-function getTodayNote() {
+// 🌼 安定して同じ日付に同じnoteを返すハッシュ式
+function getTodayNoteStable() {
   const today = getJapanDateString();
-  const index = new Date(today).getDate() % noteList.length;
+  let hash = 0;
+  for (let i = 0; i < today.length; i++) {
+    hash = today.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % noteList.length;
   return noteList[index];
 }
 
@@ -45,7 +50,7 @@ app.post('/webhook', async (req, res) => {
   if (!events || events.length === 0) return res.status(200).send("No events");
 
   const today = getJapanDateString();
-  const todayNote = getTodayNote();
+  const todayNote = getTodayNoteStable();
 
   for (const event of events) {
     try {
@@ -178,3 +183,4 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`✅ LINEボットがポート ${port} で起動中`);
 });
+
