@@ -1,4 +1,8 @@
-// たっくんLINE Bot：管理者用パスワード確認付き（azu1228）
+// たっくんLINE Bot：管理者用パスワード確認付き（azu1228） 完全版
+
+const express = require('express');
+const app = express();
+app.use(express.json());
 
 const ADMIN_SECRET = 'azu1228';
 
@@ -9,6 +13,11 @@ const passwordList = [
   'pipi17', 'coco29', 'roro04', 'momo99', 'nana73', 'lulu21',
   'meme62', 'popo55', 'koro26', 'chibi8', 'mimi44', 'lala18', 'fufu31'
 ];
+
+const { messagingApi } = require('@line/bot-sdk');
+const line = new messagingApi.MessagingApiClient({
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+});
 
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
@@ -30,17 +39,29 @@ app.post('/webhook', async (req, res) => {
         messages: [
           {
             type: 'text',
-            text: `✨ 管理者モード
-本日(${today.toLocaleDateString('ja-JP')})の note パスワードは「${todayPassword}」ですよ♡`
+            text: `\u2728 管理者モード\n本日(${today.toLocaleDateString('ja-JP')})の note パスワードは「${todayPassword}」ですよ\u2661`
           }
         ]
       });
       continue;
     }
 
-    // それ以外は通常のロジックへ...
-    // (この後に通常の処理: Supabase や OpenAI 連携 などが続く)
+    // 通常のユーザー処理（省略）
+    await line.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: `こんにちは☺️ ただいま管理者モードではありません。`
+        }
+      ]
+    });
   }
 
   res.status(200).send('OK');
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`\u{1F680} LINEボットがポート${port}で起動中！`);
 });
