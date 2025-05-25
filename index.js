@@ -79,7 +79,7 @@ app.post('/webhook', async (req, res) => {
           .from('user_sessions')
           .select('*')
           .eq('user_id', userId)
-          .single();
+          .maybeSingle();
 
         let count = 0;
         let messages = [];
