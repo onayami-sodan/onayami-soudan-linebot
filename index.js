@@ -1,4 +1,4 @@
-// たっくんLINE Bot：note連携＆管理者認証 安定版パスワード🌼
+// たっくんLINE Bot：セッション履歴保持つき 完全安定バージョン🌸
 
 require('dotenv').config();
 const express = require('express');
@@ -25,7 +25,6 @@ const noteList = [
   { password: 'yume56', url: 'https://note.com/noble_loris1361/n/ndb8877c2b1b6' },
   { password: 'meme62', url: 'https://note.com/noble_loris1361/n/nabcde1234567' },
   { password: 'riri07', url: 'https://note.com/noble_loris1361/n/nriri07123456' },
-  // 必要に応じて追加してね！
 ];
 
 function getJapanDateString() {
@@ -34,7 +33,6 @@ function getJapanDateString() {
   return jst.toISOString().slice(0, 10);
 }
 
-// 🌼 安定して同じ日付に同じnoteを返すハッシュ式
 function getTodayNoteStable() {
   const today = getJapanDateString();
   let hash = 0;
@@ -43,6 +41,12 @@ function getTodayNoteStable() {
   }
   const index = Math.abs(hash) % noteList.length;
   return noteList[index];
+}
+
+function isRecent(timestamp) {
+  const now = Date.now();
+  const diff = now - new Date(timestamp).getTime();
+  return diff < 12 * 60 * 60 * 1000; // 12時間以内
 }
 
 app.post('/webhook', async (req, res) => {
@@ -58,7 +62,6 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
 
-        // 🌟 管理者認証モード
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
             replyToken: event.replyToken,
@@ -74,11 +77,9 @@ app.post('/webhook', async (req, res) => {
 
         let { data: session, error } = await supabase
           .from('user_sessions')
-          .select('count, messages, last_date, greeted, authenticated, auth_date')
+          .select('*')
           .eq('user_id', userId)
           .single();
-
-        if (error) console.error('❌ Supabase セッション取得エラー:', error);
 
         let count = 0;
         let messages = [];
@@ -86,24 +87,21 @@ app.post('/webhook', async (req, res) => {
         let lastDate = today;
         let authenticated = false;
         let authDate = null;
+        let lastUpdated = null;
 
         if (session) {
-          messages = session.messages || [];
+          const isSameDay = session.last_date === today;
+          const isRecentUpdate = isRecent(session.updated_at);
+
+          count = isSameDay ? session.count || 0 : 0;
+          messages = isRecentUpdate ? session.messages || [] : [];
           greeted = session.greeted || false;
           lastDate = session.last_date || today;
-          authenticated = session.authenticated || false;
-          authDate = session.auth_date || null;
-
-          if (lastDate !== today) {
-            count = 0;
-            authenticated = false;
-            authDate = null;
-          } else {
-            count = session.count || 0;
-          }
+          authenticated = isSameDay ? session.authenticated || false : false;
+          authDate = isSameDay ? session.auth_date || null : null;
+          lastUpdated = new Date().toISOString();
         }
 
-        // 🔐 合言葉認証
         if (userMessage === todayNote.password) {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
@@ -113,6 +111,7 @@ app.post('/webhook', async (req, res) => {
             greeted,
             authenticated: true,
             auth_date: today,
+            updated_at: new Date().toISOString(),
           });
 
           await line.replyMessage({
@@ -135,7 +134,7 @@ app.post('/webhook', async (req, res) => {
             `このまま続けるなら、下のリンクから合言葉を入手してね☺️\n` +
             `👉 ${todayNote.url}`;
         } else {
-          if (count === 0 && messages.length === 0 && !greeted) {
+          if (messages.length === 0 && !greeted) {
             messages.push({
               role: 'system',
               content: 'あなたは30歳くらいの、やさしくておっとりした女性相談員です。話し相手の気持ちに寄り添いながら、ふわっとやわらかい口調で返してください。決してきつい言い方はせず、質問の形で会話が続くようにしてください。かわいらしく、安心感のある雰囲気を大切にしてください。意味のない返事には、やさしく相づちを返すだけで大丈夫です。'
@@ -164,6 +163,7 @@ app.post('/webhook', async (req, res) => {
           greeted,
           authenticated,
           auth_date: authDate,
+          updated_at: new Date().toISOString(),
         });
 
         await line.replyMessage({
@@ -183,4 +183,3 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`✅ LINEボットがポート ${port} で起動中`);
 });
-
