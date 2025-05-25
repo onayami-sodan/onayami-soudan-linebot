@@ -15,49 +15,38 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
 
-const NOTE_URL = 'https://note.com/your_note_link';
+const noteList = [
+  { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
+  { password: 'momo34', url: 'https://note.com/noble_loris1361/n/nfbd564d7f9fb' },
+  { password: 'yume56', url: 'https://note.com/noble_loris1361/n/ndb8877c2b1b6' }
+];
 
-// 日本時間の日付取得
 function getJapanDateString() {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   return jst.toISOString().slice(0, 10);
 }
 
-// 日替わりパスワード（非公開用）
-function generateDailyPassword() {
-  const jst = new Date(new Date().getTime() + 9 * 60 * 60 * 1000);
-  const seed = jst.toISOString().slice(0, 10);
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = seed.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let password = '';
-  for (let i = 0; i < 6; i++) {
-    password += chars.charAt(Math.abs((hash + i * 17) % chars.length));
-  }
-  return password;
+function getTodayNote() {
+  const today = getJapanDateString();
+  const index = new Date(today).getDate() % noteList.length;
+  return noteList[index];
 }
 
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
-
   if (!events || events.length === 0) {
     return res.status(200).send("No events");
   }
 
   const today = getJapanDateString();
-  const todayPassword = generateDailyPassword();
+  const todayNote = getTodayNote();
 
   for (const event of events) {
     try {
       if (event.type === 'message' && event.message.type === 'text') {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
-
-        console.log(`📩 [${today}] userId: ${userId}, message: ${userMessage}`);
-        console.log(`🔐 認証チェック: 入力=${userMessage}, 正解=${todayPassword}`);
 
         let { data: session, error } = await supabase
           .from('user_sessions')
@@ -90,8 +79,8 @@ app.post('/webhook', async (req, res) => {
           }
         }
 
-        // ✅ パスワード認証成功時
-        if (userMessage === todayPassword) {
+        // 🔐 パスワード認証処理（note連携）
+        if (userMessage === todayNote.password) {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
             count,
@@ -106,7 +95,7 @@ app.post('/webhook', async (req, res) => {
             replyToken: event.replyToken,
             messages: [{
               type: 'text',
-              text: `パスワード認証できたよ☺️\n今日は回数制限なしで、ゆっくりお話ししようね💕`
+              text: `合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕`
             }],
           });
           continue;
@@ -119,14 +108,13 @@ app.post('/webhook', async (req, res) => {
           replyText =
             `たくさんお話してくれてありがとうね☺️\n` +
             `明日になれば、またお話しできるよ🥰\n` +
-            `このまま続けるなら日替わりパスワードを取得してトークルームに入力してね☺️\n` +
-            `👉 ${NOTE_URL}`; // ✅ パスワードを表示しない
+            `このまま続けるなら、下のリンクから合言葉を入手してね☺️\n` +
+            `👉 ${todayNote.url}`;
         } else {
           if (count === 0 && messages.length === 0 && !greeted) {
             messages.push({
               role: 'system',
-              content:
-                'あなたは30歳くらいの、やさしくておっとりした女性相談員です。話し相手の気持ちに寄り添いながら、ふわっとやわらかい口調で返してください。決してきつい言い方はせず、質問の形で会話が続くようにしてください。かわいらしく、安心感のある雰囲気を大切にしてください。意味のない返事には、やさしく相づちを返すだけで大丈夫です。',
+              content: 'あなたは30歳くらいの、やさしくておっとりした女性相談員です。話し相手の気持ちに寄り添いながら、ふわっとやわらかい口調で返してください。決してきつい言い方はせず、質問の形で会話が続くようにしてください。かわいらしく、安心感のある雰囲気を大切にしてください。意味のない返事には、やさしく相づちを返すだけで大丈夫です。'
             });
             greeted = true;
           }
@@ -144,9 +132,7 @@ app.post('/webhook', async (req, res) => {
           replyText = assistantMessage.content;
         }
 
-        console.log(`💬 Botの返答: ${replyText}`);
-
-        const { error: saveError } = await supabase.from('user_sessions').upsert({
+        await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: newCount,
           messages,
@@ -155,8 +141,6 @@ app.post('/webhook', async (req, res) => {
           authenticated,
           auth_date: authDate,
         });
-
-        if (saveError) console.error('❌ Supabase 保存エラー:', saveError);
 
         await line.replyMessage({
           replyToken: event.replyToken,
