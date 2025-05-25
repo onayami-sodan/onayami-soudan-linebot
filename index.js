@@ -165,7 +165,9 @@ app.post('/webhook', async (req, res) => {
           const assistantMessage = chatResponse.choices[0].message;
           messages.push({ role: 'assistant', content: assistantMessage.content });
 
-          replyText = assistantMessage.content;
+          replyText = newCount === 1
+  ? 'うんうん、元気だよ〜☺️ たっくんは元気してた〜？ 最近なんか楽しいことあった？🌸 気軽にいっぱい話そ〜💕'
+  : assistantMessage.content;
         }
 
         await supabase.from('user_sessions').upsert({
