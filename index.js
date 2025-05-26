@@ -1,4 +1,4 @@
-// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件）
+// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件 + デバッグ付き）
 
 require('dotenv').config();
 const express = require('express');
@@ -66,6 +66,10 @@ function getTodayNoteStable() {
     hash = today.charCodeAt(i) + ((hash << 5) - hash);
   }
   const index = Math.abs(hash) % noteList.length;
+
+  // 🌟 ここがデバッグ出力！
+  console.log(`[DEBUG] today=${today}, hash=${hash}, index=${index}, noteList.length=${noteList.length}`);
+
   return noteList[index];
 }
 
