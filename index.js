@@ -49,6 +49,11 @@ function isRecent(timestamp) {
   return diff < 12 * 60 * 60 * 1000; // 12時間以内
 }
 
+// 🌐 pingエンドポイント追加（Renderスリープ防止用）
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
   if (!events || events.length === 0) return res.status(200).send("No events");
@@ -168,9 +173,7 @@ app.post('/webhook', async (req, res) => {
           const assistantMessage = chatResponse.choices[0].message;
           messages.push({ role: 'assistant', content: assistantMessage.content });
 
-          replyText = newCount === 1
-  ? 'うんうん、元気だよ〜☺️ 最近なんか楽しいことあった？🌸 気軽にいっぱい話そ〜💕'
-  : assistantMessage.content;
+          replyText = assistantMessage.content;
         }
 
         await supabase.from('user_sessions').upsert({
