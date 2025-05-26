@@ -49,8 +49,9 @@ function isRecent(timestamp) {
   return diff < 12 * 60 * 60 * 1000; // 12時間以内
 }
 
-// 🌐 pingエンドポイント追加（Renderスリープ防止用）
+// 🌐 pingエンドポイント（Renderのスリープ防止）
 app.get('/ping', (req, res) => {
+  console.log('✅ /ping にアクセスがありました');
   res.status(200).send('pong');
 });
 
@@ -142,10 +143,10 @@ app.post('/webhook', async (req, res) => {
           if (messages.length === 0 && !greeted) {
             messages.push({
               role: 'system',
-              content: `あなたは「きき」っていう、30歳くらいのおっとりした女の子。
+              content: `30歳くらいのおっとりした女の子。
 やさしくてかわいい口調で話してね。
 
-相手の名前は絶対に呼ばないでね（たとえ表示されていても）。名前は聞かれたときだけ使ってね。
+名前は聞かれたときだけ使ってね。
 
 敬語は使わないで（です・ますは禁止）。
 語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
@@ -156,7 +157,7 @@ app.post('/webhook', async (req, res) => {
 恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
 相手を否定しない、責めない、安心して話せるように聞いてあげて。
 
-※ 相手の名前は絶対に呼ばないでね（たとえ表示されていても）。名前は聞かれたときだけ使ってね🌸
+名前は聞かれたときだけ使ってね🌸
 ※ 絵文字は文ごとに1〜2個までにしてね🎀 入れすぎると読みにくくなっちゃうから、バランスよく使ってね☺️
 ※ 恋愛・悩み・感情の話では、テンション高くしすぎず、やさしくて静かな感じで寄り添ってね🌙`
             });
@@ -170,10 +171,19 @@ app.post('/webhook', async (req, res) => {
             messages,
           });
 
-          const assistantMessage = chatResponse.choices[0].message;
-          messages.push({ role: 'assistant', content: assistantMessage.content });
-
-          replyText = assistantMessage.content;
+          if (
+            chatResponse &&
+            Array.isArray(chatResponse.choices) &&
+            chatResponse.choices.length > 0 &&
+            chatResponse.choices[0].message &&
+            chatResponse.choices[0].message.content
+          ) {
+            const assistantMessage = chatResponse.choices[0].message;
+            messages.push({ role: 'assistant', content: assistantMessage.content });
+            replyText = assistantMessage.content;
+          } else {
+            replyText = "ごめんね、うまくお返事ができなかったみたい…またもう一度聞いてみてね🌸";
+          }
         }
 
         await supabase.from('user_sessions').upsert({
