@@ -1,5 +1,3 @@
-// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（noteリンク31件対応）
-
 require('dotenv').config();
 const express = require('express');
 const { messagingApi } = require('@line/bot-sdk');
@@ -59,20 +57,18 @@ function getJapanDateString() {
   return jst.toISOString().slice(0, 10);
 }
 
+// ✅ たっくんが選んだバージョン（安定・簡潔・日付単位で違う）
 function getTodayNoteStable() {
-  const today = getJapanDateString();
-  let hash = 0;
-  for (let i = 0; i < today.length; i++) {
-    hash = today.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const index = Math.abs(hash) % noteList.length;
+  const today = getJapanDateString(); // "2025-05-26"
+  const num = parseInt(today.replace(/-/g, '')); // 20250526
+  const index = num % noteList.length;
   return noteList[index];
 }
 
 function isRecent(timestamp) {
   const now = Date.now();
   const diff = now - new Date(timestamp).getTime();
-  return diff < 12 * 60 * 60 * 1000; // 12時間以内
+  return diff < 12 * 60 * 60 * 1000;
 }
 
 app.get('/ping', (req, res) => {
@@ -225,4 +221,3 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`✅ LINEボットがポート ${port} で起動中`);
 });
-
