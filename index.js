@@ -1,3 +1,5 @@
+// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件）
+
 require('dotenv').config();
 const express = require('express');
 const { messagingApi } = require('@line/bot-sdk');
@@ -57,11 +59,13 @@ function getJapanDateString() {
   return jst.toISOString().slice(0, 10);
 }
 
-// ✅ たっくんが選んだバージョン（安定・簡潔・日付単位で違う）
 function getTodayNoteStable() {
-  const today = getJapanDateString(); // "2025-05-26"
-  const num = parseInt(today.replace(/-/g, '')); // 20250526
-  const index = num % noteList.length;
+  const today = getJapanDateString();
+  let hash = 0;
+  for (let i = 0; i < today.length; i++) {
+    hash = today.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % noteList.length;
   return noteList[index];
 }
 
@@ -72,7 +76,6 @@ function isRecent(timestamp) {
 }
 
 app.get('/ping', (req, res) => {
-  console.log('✅ /ping にアクセスがありました');
   res.status(200).send('pong');
 });
 
@@ -102,7 +105,7 @@ app.post('/webhook', async (req, res) => {
           continue;
         }
 
-        let { data: session, error } = await supabase
+        let { data: session } = await supabase
           .from('user_sessions')
           .select('*')
           .eq('user_id', userId)
@@ -161,11 +164,18 @@ app.post('/webhook', async (req, res) => {
             messages.push({
               role: 'system',
               content: `あなたは「きき」っていう、30歳くらいのおっとりした女の子。
-かわいくてやさしい口調で話してね。名前は聞かれたときだけ呼んでいいよ。
+やさしくてかわいい口調で話してね。
 
-敬語（〜です、〜ます）は使わず、語尾には「〜ね」「〜かな？」「〜してみよっか」などをつけてね。
+相手の名前は絶対に呼ばないでね（たとえ表示されていても）。名前は聞かれたときだけ使ってね。
 
-絵文字は1つの文に1つまで。恋愛や感情の話では静かで寄り添う感じにしてね🌸`
+敬語は使わないで（です・ますは禁止）。
+語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
+
+絵文字は文ごとに1つまでにしてね。
+入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
+
+恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
+相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
             });
             greeted = true;
           }
@@ -175,22 +185,12 @@ app.post('/webhook', async (req, res) => {
           const chatResponse = await openai.chat.completions.create({
             model: 'gpt-4o',
             messages,
-            max_tokens: 500,
           });
 
-          if (
-            chatResponse &&
-            Array.isArray(chatResponse.choices) &&
-            chatResponse.choices.length > 0 &&
-            chatResponse.choices[0].message &&
-            chatResponse.choices[0].message.content
-          ) {
-            const assistantMessage = chatResponse.choices[0].message;
-            messages.push({ role: 'assistant', content: assistantMessage.content });
-            replyText = assistantMessage.content;
-          } else {
-            replyText = "ごめんね、うまくお返事ができなかったみたい…またもう一度聞いてみてね🌸";
-          }
+          const assistantMessage = chatResponse.choices[0].message;
+          messages.push({ role: 'assistant', content: assistantMessage.content });
+
+          replyText = assistantMessage.content;
         }
 
         await supabase.from('user_sessions').upsert({
