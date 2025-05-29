@@ -194,7 +194,7 @@ if (!authenticated) {
     messages.push({ role: 'assistant', content: assistantMessage.content });
 
     replyText = assistantMessage.content + "\n\n" +
-      `🌸 続けて話したい方はこちらからパスワードを見てね！\n👉 ${todayNote.url}\n🔑 合言葉は「${todayNote.password}」だよ💕`;
+      `🌸 続けて話したい方はこちらから合言葉を入手してね！\n👉 ${todayNote.url}\n🔑 `;
 
   } else {
     // 7回目以降：note案内のみ
