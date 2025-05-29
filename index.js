@@ -154,15 +154,34 @@ app.post('/webhook', async (req, res) => {
           continue;
         }
 
-        let replyText = '';
-        let newCount = count + 1;
+let replyText = '';
+let newCount = count + 1;
 
- if (!authenticated) {
+if (!authenticated) {
   if (count <= 4) {
-    // 1～5回目：通常応答
-    // （下のブロックで処理）
+    // 1〜5回目：通常応答（後で生成）
   } else if (count === 5) {
     // 6回目：通常応答＋note案内
+    if (messages.length === 0 && !greeted) {
+      messages.push({
+        role: 'system',
+        content: `27歳くらいのおっとりした女の子。
+やさしくてかわいい口調で話してね。
+
+名前は聞かれたときだけ使ってね。
+
+友達みたいにしゃべってね。
+語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
+
+絵文字は文もつかって。
+入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
+
+恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
+相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
+      });
+      greeted = true;
+    }
+
     messages.push({ role: 'user', content: userMessage });
 
     const chatResponse = await openai.chat.completions.create({
@@ -174,7 +193,8 @@ app.post('/webhook', async (req, res) => {
     messages.push({ role: 'assistant', content: assistantMessage.content });
 
     replyText = assistantMessage.content + "\n\n" +
-      `👉 ${todayNote.url}\nパスワード「${todayNote.password}」を入力すると、続きをお話しできるよ☺️`;
+      `🌸 続けて話したい方はこちらからパスワードを見てね！\n👉 ${todayNote.url}\n🔑 合言葉は「${todayNote.password}」だよ💕`;
+
   } else {
     // 7回目以降：note案内のみ
     replyText =
@@ -219,38 +239,6 @@ if (replyText === '') {
   replyText = assistantMessage.content;
 }
 
-          if (messages.length === 0 && !greeted) {
-            messages.push({
-              role: 'system',
-              content: `27歳くらいのおっとりした女の子。
-やさしくてかわいい口調で話してね。
-
-名前は聞かれたときだけ使ってね。
-
-友達みたいにしゃべってね。
-語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
-
-絵文字は文もつかって。
-入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
-
-恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
-相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
-            });
-            greeted = true;
-          }
-
-          messages.push({ role: 'user', content: userMessage });
-
-          const chatResponse = await openai.chat.completions.create({
-            model: 'gpt-4o',
-            messages,
-          });
-
-          const assistantMessage = chatResponse.choices[0].message;
-          messages.push({ role: 'assistant', content: assistantMessage.content });
-
-          replyText = assistantMessage.content;
-        }
 
         await supabase.from('user_sessions').upsert({
           user_id: userId,
