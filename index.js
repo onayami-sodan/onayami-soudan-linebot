@@ -1,4 +1,4 @@
-// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（6回目にnote案内追加 + 7回目以降note案内のみ）
+// LINE Bot：キャラ設定だけ保持＆会話履歴は2日でリセット🌸
 
 require('dotenv').config();
 const express = require('express');
@@ -21,8 +21,8 @@ const ADMIN_SECRET = 'azu1228';
 
 const noteList = [
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
-  // ...（以下省略）noteList をすべて入れてください
   { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' },
+  // ... 他の noteList も続けてね
 ];
 
 function getJapanDateString() {
@@ -45,8 +45,21 @@ function getTodayNoteStable() {
 function isRecent(timestamp) {
   const now = Date.now();
   const diff = now - new Date(timestamp).getTime();
-  return diff < 12 * 60 * 60 * 1000;
+  return diff < 2 * 24 * 60 * 60 * 1000; // 2日以内
 }
+
+const getSystemPrompt = () => ({
+  role: 'system',
+  content: `あなたは「きき」っていう、30歳くらいのおっとりした女の子。
+やさしくてかわいい口調で話してね。
+相手の名前は絶対に呼ばないでね（たとえ表示されていても）。名前は聞かれたときだけ使ってね。
+敬語は使わないで（です・ますは禁止）。
+語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
+絵文字は文ごとに1つまでにしてね。
+入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
+恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
+相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
+});
 
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
@@ -84,27 +97,22 @@ app.post('/webhook', async (req, res) => {
 
         let count = 0;
         let messages = [];
-        let greeted = false;
         let authenticated = false;
         let authDate = null;
 
         if (session) {
-          const isSameDay = session.last_date === today;
           const isRecentUpdate = isRecent(session.updated_at);
-          count = isSameDay ? session.count || 0 : 0;
-          messages = isRecentUpdate ? session.messages || [] : [];
-          greeted = session.greeted || false;
-          authenticated = isSameDay ? session.authenticated || false : false;
-          authDate = isSameDay ? session.auth_date || null : null;
+          count = isRecentUpdate ? session.count || 0 : 0;
+          authenticated = isRecentUpdate ? session.authenticated || false : false;
+          authDate = isRecentUpdate ? session.auth_date || null : null;
         }
 
         if (userMessage === todayNote.password) {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
             count,
-            messages: messages.slice(-6),
+            messages: [],
             last_date: today,
-            greeted,
             authenticated: true,
             auth_date: today,
             updated_at: new Date().toISOString(),
@@ -130,33 +138,27 @@ app.post('/webhook', async (req, res) => {
           continue;
         }
 
-        if (messages.length === 0 && !greeted) {
-          messages.push({
-            role: 'system',
-            content: `あなたは「きき」っていう、30歳くらいのおっとりした女の子。やさしくてかわいい口調で話してね。相手の名前は絶対に呼ばないでね。敬語は使わないで。語尾には「〜ね」「〜かな？」「〜してみよっか」。絵文字は文ごとに1つまで。恋愛・感情の話は落ち着いた雰囲気で。否定しないでね🌸`
-          });
-          greeted = true;
-        }
+        // キャラ設定だけ毎回新しく作る
+        messages = [
+          getSystemPrompt(),
+          { role: 'user', content: userMessage }
+        ];
 
-        messages.push({ role: 'user', content: userMessage });
         const chatResponse = await openai.chat.completions.create({
           model: 'gpt-4o',
           messages,
         });
-        const assistantMessage = chatResponse.choices[0].message;
-        messages.push({ role: 'assistant', content: assistantMessage.content });
 
-        let replyText = assistantMessage.content;
-        if (!authenticated && count === 5) {
-          replyText += `\n\n🌸もっとお話したいときは、こちらから合言葉を入手してね♪\n👉 ${todayNote.url}`;
-        }
+        const assistantMessage = chatResponse.choices[0].message;
+        const replyText = (count === 5 && !authenticated)
+          ? `${assistantMessage.content}\n\n🌸もっとお話したいときは、こちらから合言葉を入手してね♪\n👉 ${todayNote.url}`
+          : assistantMessage.content;
 
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
-          messages: messages.slice(-6),
+          messages: [], // 会話履歴は保存しない
           last_date: today,
-          greeted,
           authenticated,
           auth_date: authDate,
           updated_at: new Date().toISOString(),
