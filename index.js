@@ -1,4 +1,4 @@
-// LINE Bot：キャラ設定だけ保持＆会話履歴は2日でリセット🌸
+// LINE Bot：キャラ設定だけ保持＆会話履歴は2日でリセット🌸（名前未設定で名付け歓迎）
 
 require('dotenv').config();
 const express = require('express');
@@ -9,10 +9,7 @@ const { supabase } = require('./supabaseClient');
 const app = express();
 app.use(express.json());
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
@@ -22,7 +19,7 @@ const ADMIN_SECRET = 'azu1228';
 const noteList = [
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
   { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' },
-  // ... 他の noteList も続けてね
+  // ... ここに31個すべての note を順番に追加してね 🌸
 ];
 
 function getJapanDateString() {
@@ -38,20 +35,25 @@ function getTodayNoteStable() {
     hash = today.charCodeAt(i) + ((hash << 5) - hash);
   }
   const index = Math.abs(hash) % noteList.length;
-  console.log(`[DEBUG] today=${today}, hash=${hash}, index=${index}, noteList.length=${noteList.length}`);
   return noteList[index];
 }
 
 function isRecent(timestamp) {
   const now = Date.now();
   const diff = now - new Date(timestamp).getTime();
-  return diff < 2 * 24 * 60 * 60 * 1000; // 2日以内
+  return diff < 2 * 24 * 60 * 60 * 1000;
 }
 
 const getSystemPrompt = () => ({
   role: 'system',
-  content: `あなたは「きき」っていう、30歳くらいのおっとりした女の子。
+  content: `あなたは30歳くらいのおっとりした女の子。
 やさしくてかわいい口調で話してね。
+
+あなたには、まだ名前がないよ。
+だから、ユーザーが「名前つけていい？」とか「名前考えてもいい？」とか「名前まだないの？」って聞いてきたら、「うん、考えてくれるの？うれしいな〜🌸」って答えてね。
+
+でも「名前は？」「なんて名前？」みたいに聞かれたら、「まだ名前ないの〜☺️」とか「それはまだ内緒だよ〜🌷」って、やさしくぼかしてね。
+
 相手の名前は絶対に呼ばないでね（たとえ表示されていても）。名前は聞かれたときだけ使ってね。
 敬語は使わないで（です・ますは禁止）。
 語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
@@ -61,9 +63,7 @@ const getSystemPrompt = () => ({
 相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
 });
 
-app.get('/ping', (req, res) => {
-  res.status(200).send('pong');
-});
+app.get('/ping', (req, res) => res.status(200).send('pong'));
 
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
@@ -138,10 +138,9 @@ app.post('/webhook', async (req, res) => {
           continue;
         }
 
-        // キャラ設定だけ毎回新しく作る
         messages = [
           getSystemPrompt(),
-          { role: 'user', content: userMessage }
+          { role: 'user', content: userMessage },
         ];
 
         const chatResponse = await openai.chat.completions.create({
@@ -157,7 +156,7 @@ app.post('/webhook', async (req, res) => {
         await supabase.from('user_sessions').upsert({
           user_id: userId,
           count: count + 1,
-          messages: [], // 会話履歴は保存しない
+          messages: [],
           last_date: today,
           authenticated,
           auth_date: authDate,
