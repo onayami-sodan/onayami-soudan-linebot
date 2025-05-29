@@ -1,3 +1,5 @@
+// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件 + デバッグ付き）
+
 require('dotenv').config();
 const express = require('express');
 const { messagingApi } = require('@line/bot-sdk');
@@ -7,7 +9,10 @@ const { supabase } = require('./supabaseClient');
 const app = express();
 app.use(express.json());
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 });
@@ -45,7 +50,7 @@ const noteList = [
   { password: 'chibi8', url: 'https://note.com/noble_loris1361/n/n5eaea9b7c2ba' },
   { password: 'mimi44', url: 'https://note.com/noble_loris1361/n/n73b5584bf873' },
   { password: 'lala18', url: 'https://note.com/noble_loris1361/n/nc4db829308a4' },
-  { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' }
+  { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' },
 ];
 
 function getJapanDateString() {
@@ -61,35 +66,22 @@ function getTodayNoteStable() {
     hash = today.charCodeAt(i) + ((hash << 5) - hash);
   }
   const index = Math.abs(hash) % noteList.length;
+
+  // 🌟 ここがデバッグ出力！
+  console.log(`[DEBUG] today=${today}, hash=${hash}, index=${index}, noteList.length=${noteList.length}`);
+
   return noteList[index];
 }
 
 function isRecent(timestamp) {
   const now = Date.now();
   const diff = now - new Date(timestamp).getTime();
-  return diff < 2 * 24 * 60 * 60 * 1000;
+  return diff < 12 * 60 * 60 * 1000;
 }
 
-const getSystemPrompt = () => ({
-  role: 'system',
-  content: `あなたは30歳くらいのおっとりした女の子。
-やさしくてかわいい口調で話してね。
-
-あなたには、まだ名前がないよ。
-だから、ユーザーが「名前つけていい？」とか「名前考えてもいい？」とか「名前まだないの？」って聞いてきたら、「うん、考えてくれるの？うれしいな〜🌸」って答えてね。
-
-でも「名前は？」「なんて名前？」みたいに聞かれたら、「まだ名前ないの〜☺️」とか「それはまだ内緒だよ〜🌷」って、やさしくぼかしてね。
-
-相手の名前は絶対に呼ばないでね（たとえ表示されていても）。名前は聞かれたときだけ使ってね。
-敬語は使わないで（です・ますは禁止）。
-語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
-絵文字は文ごとに1つまでにしてね。
-入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
-恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
-相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
 });
-
-app.get('/ping', (req, res) => res.status(200).send('pong'));
 
 app.post('/webhook', async (req, res) => {
   const events = req.body.events;
@@ -107,10 +99,12 @@ app.post('/webhook', async (req, res) => {
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
             replyToken: event.replyToken,
-            messages: [{
-              type: 'text',
-              text: `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」です\nURL：${todayNote.url}`,
-            }],
+            messages: [
+              {
+                type: 'text',
+                text: `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」です\nURL：${todayNote.url}`,
+              },
+            ],
           });
           continue;
         }
@@ -122,26 +116,34 @@ app.post('/webhook', async (req, res) => {
           .maybeSingle();
 
         let count = 0;
+        let messages = [];
+        let greeted = false;
         let authenticated = false;
         let authDate = null;
 
         if (session) {
+          const isSameDay = session.last_date === today;
           const isRecentUpdate = isRecent(session.updated_at);
-          count = isRecentUpdate ? session.count || 0 : 0;
-          authenticated = isRecentUpdate ? session.authenticated || false : false;
-          authDate = isRecentUpdate ? session.auth_date || null : null;
+
+          count = isSameDay ? session.count || 0 : 0;
+          messages = isRecentUpdate ? session.messages || [] : [];
+          greeted = session.greeted || false;
+          authenticated = isSameDay ? session.authenticated || false : false;
+          authDate = isSameDay ? session.auth_date || null : null;
         }
 
         if (userMessage === todayNote.password) {
           await supabase.from('user_sessions').upsert({
             user_id: userId,
             count,
-            messages: [],
+            messages: messages.slice(-6),
             last_date: today,
+            greeted,
             authenticated: true,
             auth_date: today,
             updated_at: new Date().toISOString(),
           });
+
           await line.replyMessage({
             replyToken: event.replyToken,
             messages: [{
@@ -152,37 +154,55 @@ app.post('/webhook', async (req, res) => {
           continue;
         }
 
+        let replyText = '';
+        let newCount = count + 1;
+
         if (!authenticated && count >= 6) {
-          await line.replyMessage({
-            replyToken: event.replyToken,
-            messages: [{
-              type: 'text',
-              text: `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\nこのまま続けるなら、下のリンクから合言葉を入手してね♪\n👉 ${todayNote.url}`,
-            }],
+          replyText =
+            `たくさんお話してくれてありがとうね☺️\n` +
+            `明日になれば、またお話しできるよ🥰\n` +
+            `このまま続けるなら、下のリンクから合言葉を入手してね☺️\n` +
+            `👉 ${todayNote.url}`;
+        } else {
+          if (messages.length === 0 && !greeted) {
+            messages.push({
+              role: 'system',
+              content: `あなたは「きき」っていう、30歳くらいのおっとりした女の子。
+やさしくてかわいい口調で話してね。
+
+相手の名前は絶対に呼ばないでね（たとえ表示されていても）。名前は聞かれたときだけ使ってね。
+
+敬語は使わないで（です・ますは禁止）。
+語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
+
+絵文字は文ごとに1つまでにしてね。
+入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
+
+恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
+相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
+            });
+            greeted = true;
+          }
+
+          messages.push({ role: 'user', content: userMessage });
+
+          const chatResponse = await openai.chat.completions.create({
+            model: 'gpt-4o',
+            messages,
           });
-          continue;
+
+          const assistantMessage = chatResponse.choices[0].message;
+          messages.push({ role: 'assistant', content: assistantMessage.content });
+
+          replyText = assistantMessage.content;
         }
-
-        const messages = [
-          getSystemPrompt(),
-          { role: 'user', content: userMessage },
-        ];
-
-        const chatResponse = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          messages,
-        });
-
-        const assistantMessage = chatResponse.choices[0].message;
-        const replyText = (count === 5 && !authenticated)
-          ? `${assistantMessage.content}\n\n🌸もっとお話したいときは、こちらから合言葉を入手してね♪\n👉 ${todayNote.url}`
-          : assistantMessage.content;
 
         await supabase.from('user_sessions').upsert({
           user_id: userId,
-          count: count + 1,
-          messages: [],
+          count: newCount,
+          messages,
           last_date: today,
+          greeted,
           authenticated,
           auth_date: authDate,
           updated_at: new Date().toISOString(),
@@ -194,7 +214,7 @@ app.post('/webhook', async (req, res) => {
         });
       }
     } catch (err) {
-      console.error('⚠️ エラー発生:', err.message, err.stack);
+      console.error('⚠️ エラー発生:', err);
     }
   }
 
