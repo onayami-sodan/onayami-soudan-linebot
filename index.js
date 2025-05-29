@@ -1,4 +1,4 @@
-// LINE Bot：セッション履歴保持つき 完全安定バージョン✨（note 31件 + デバッグ付き）
+// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件 + デバッグ付き）
 
 require('dotenv').config();
 const express = require('express');
@@ -9,8 +9,13 @@ const { supabase } = require('./supabaseClient');
 const app = express();
 app.use(express.json());
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const line = new messagingApi.MessagingApiClient({ channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const line = new messagingApi.MessagingApiClient({
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+});
 
 const ADMIN_SECRET = 'azu1228';
 
@@ -47,7 +52,6 @@ const noteList = [
   { password: 'lala18', url: 'https://note.com/noble_loris1361/n/nc4db829308a4' },
   { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' },
 ];
-
 
 function getJapanDateString() {
   const now = new Date();
@@ -89,31 +93,23 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
 
-        // キャラ設定と名前を読み込む
         const { data: charRow } = await supabase
           .from('user_characters')
           .select('character_persona, character_name')
           .eq('user_id', userId)
           .maybeSingle();
 
-        const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。
-やさしくてかわいい口誤で話してね。
-名前は聞かれたときだけ使ってね。
-友達みたいにしゃべってね。
-言葉のごびにやさしい言葉をつけて。
-絵文字も文中で使って。
-恋愛や悩みの話は落ち着いた雰囲気を大切にして。`;
+        const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。やさしくてかわいい口調で話してね。名前は聞かれたときだけ使ってね。※ただし「私は〇〇です」「〇〇って言うの」などの自己紹介はしないでね。友達みたいにしゃべってね。語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。絵文字は文もつかって。入れすぎると読みにくいから、必要なところにだけ軽く添えてね。恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`;
 
         const characterName = charRow?.character_name || '';
-        const fullPersona = `${characterPersona}
-
-※名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね🌟`;
+        const fullPersona = `${characterPersona}\n\n※名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
 
         const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
         if (namePattern.test(userMessage)) {
           const replyText = characterName
             ? `えへへ☺️　わたしの名前は「${characterName}」だよ〜🌸`
             : `ううん…まだ名前は決まってないんだぁ☺️ よかったらつけてくれる？💕`;
+
           await line.replyMessage({
             replyToken: event.replyToken,
             messages: [{ type: 'text', text: replyText }],
@@ -158,10 +154,11 @@ app.post('/webhook', async (req, res) => {
         }
 
         if (userMessage === todayNote.password) {
+          const trimmedMessages = messages.slice(-7);
           await supabase.from('user_sessions').upsert({
             user_id: userId,
             count,
-            messages: messages.slice(-6),
+            messages: trimmedMessages,
             last_date: today,
             greeted,
             authenticated: true,
@@ -220,7 +217,10 @@ app.post('/webhook', async (req, res) => {
           updated_at: new Date().toISOString(),
         });
 
-        await line.replyMessage({ replyToken: event.replyToken, messages: [{ type: 'text', text: replyText }] });
+        await line.replyMessage({
+          replyToken: event.replyToken,
+          messages: [{ type: 'text', text: replyText }],
+        });
       }
     } catch (err) {
       console.error('⚠️ エラー発生:', err);
