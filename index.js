@@ -95,6 +95,28 @@ app.post('/webhook', async (req, res) => {
       if (event.type === 'message' && event.message.type === 'text') {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
+// 🌸 Supabaseからキャラ設定を読み込む
+const { data: charRow } = await supabase
+  .from('user_characters')
+  .select('character_persona')
+  .eq('user_id', userId)
+  .maybeSingle();
+
+// 読み込めたらそれを使い、なければ初期キャラにする
+const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。
+やさしくてかわいい口調で話してね。
+
+名前は聞かれたときだけ使ってね。
+※ただし「私は〇〇です」「〇〇って言うの」などの自己紹介はしないでね。
+
+友達みたいにしゃべってね。
+語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
+
+絵文字は文もつかって。
+入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
+
+恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
+相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`;
 
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
@@ -163,25 +185,16 @@ if (!authenticated) {
   } else if (count === 5) {
     // 6回目：通常応答＋note案内
     if (messages.length === 0 && !greeted) {
-      messages.push({
-        role: 'system',
-        content: `27歳くらいのおっとりした女の子。
-やさしくてかわいい口調で話してね。
 
-名前は聞かれたときだけ使ってね。
-※ただし「私は〇〇です」「〇〇って言うの」などの自己紹介はしないでね。
+  messages.push({
+    role: 'system',
+    content: characterPersona
+  });
+  greeted = true;
+}
 
-友達みたいにしゃべってね。
-語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
 
-絵文字は文もつかって。
-入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
 
-恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
-相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
-      });
-      greeted = true;
-    }
 
     messages.push({ role: 'user', content: userMessage });
 
@@ -207,26 +220,16 @@ if (!authenticated) {
 }
 
 if (replyText === '') {
-  if (messages.length === 0 && !greeted) {
-    messages.push({
-      role: 'system',
-      content: `27歳くらいのおっとりした女の子。
-やさしくてかわいい口調で話してね。
+if (messages.length === 0 && !greeted) {
+  messages.push({
+    role: 'system',
+    content: characterPersona
+  });
+  greeted = true;
+}
 
-名前は聞かれたときだけ使ってね。
-※ただし「私は〇〇です」「〇〇って言うの」などの自己紹介はしないでね。
 
-友達みたいにしゃべってね。
-語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
 
-絵文字は文もつかって。
-入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
-
-恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
-相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`
-    });
-    greeted = true;
-  }
 
   messages.push({ role: 'user', content: userMessage });
 
