@@ -76,7 +76,7 @@ function getTodayNoteStable() {
 function isRecent(timestamp) {
   const now = Date.now();
   const diff = now - new Date(timestamp).getTime();
-  return diff < 12 * 60 * 60 * 1000;
+  return diff < 2 * 24 * 60 * 60 * 1000;
 }
 
 app.get('/ping', (req, res) => {
