@@ -113,14 +113,16 @@ if (nameSetPattern.test(userMessage)) {
 
   console.log(`[LOG] 📝 ユーザーがBotに名前をつけた: ${nickname}`);
 
-  // 🌟 Supabaseに保存する処理を追加
+  // Supabaseに保存
   const { error } = await supabase
     .from('user_characters')
     .upsert({
       user_id: userId,
       character_name: nickname,
     });
-characterName = nickname;
+
+  // fullPersonaも更新（重要🌸）
+  const fullPersona = `${characterPersona}\n\n名前を聞かれたら「${nickname}」って答えてね💕`;
 
   if (error) {
     console.error(`[ERROR] ❌ 名前の保存に失敗:`, error);
@@ -138,6 +140,7 @@ characterName = nickname;
 
   return;
 }
+
 
 
         if (namePattern.test(userMessage)) {
