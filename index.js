@@ -103,9 +103,41 @@ app.post('/webhook', async (req, res) => {
 
         const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。...`;
         const characterName = charRow?.character_name || '';
-        const fullPersona = `${characterPersona}\n\n※名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
+        const fullPersona = `${characterPersona}\n\n名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
 
+        const nameSetPattern = /(って呼んで|にするね|って名前にして)/i;
         const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
+// 🌸 名前をつけてくれた場合の検出
+if (nameSetPattern.test(userMessage)) {
+  const nickname = userMessage.replace(nameSetPattern, '').trim();
+
+  console.log(`[LOG] 📝 ユーザーがBotに名前をつけた: ${nickname}`);
+
+  // 🌟 Supabaseに保存する処理を追加
+  const { error } = await supabase
+    .from('user_characters')
+    .upsert({
+      user_id: userId,
+      character_name: nickname,
+    });
+
+  if (error) {
+    console.error(`[ERROR] ❌ 名前の保存に失敗:`, error);
+  } else {
+    console.log(`[LOG] 💾 キャラクター名を保存: ${nickname}`);
+  }
+
+  await line.replyMessage({
+    replyToken: event.replyToken,
+    messages: [{
+      type: 'text',
+      text: `うれしい〜☺️ じゃあ『${nickname}』って呼んでくれるんだね💕よろしくね〜✨`,
+    }],
+  });
+
+  return;
+}
+
 
         if (namePattern.test(userMessage)) {
           console.log(`[LOG] 📛 名前問い合わせ: userId=${userId}, characterName=${characterName || '未設定'}`);
