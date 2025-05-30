@@ -104,60 +104,7 @@ const { data: charRow } = await supabase
 
 const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。...`;
 
-// 💡 characterName は let に変更して、後で書き換え可能にする
-let characterName = charRow?.character_name || '';
-let fullPersona = `${characterPersona}\n\n名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
 
-const nameSetPattern = /(って呼んで|にするね|って名前にして)/i;
-const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
-
-// 🌸 名前をつけてくれた場合の検出と保存
-if (nameSetPattern.test(userMessage)) {
-  const nickname = userMessage.replace(nameSetPattern, '').trim();
-  console.log(`[LOG] 📝 ユーザーがBotに名前をつけた: ${nickname}`);
-
-  const { error } = await supabase
-    .from('user_characters')
-    .upsert({
-      user_id: userId,
-      character_name: nickname,
-    });
-
-  // ✅ ここで上書き！ → 次の処理でも nickname を使えるように
-  characterName = nickname;
-  fullPersona = `${characterPersona}\n\n名前を聞かれたら「${nickname}」って答えてね💕`;
-
-  if (error) {
-    console.error(`[ERROR] ❌ 名前の保存に失敗:`, error);
-  } else {
-    console.log(`[LOG] 💾 キャラクター名を保存: ${nickname}`);
-  }
-
-  await line.replyMessage({
-    replyToken: event.replyToken,
-    messages: [{
-      type: 'text',
-      text: `うれしい〜☺️ じゃあ『${nickname}』って呼んでくれるんだね💕よろしくね〜✨`,
-    }],
-  });
-
-  return;
-}
-
-        // 🌸 Botの名前を聞かれたときの返答
-        if (namePattern.test(userMessage)) {
-          console.log(`[LOG] 📛 名前問い合わせ: userId=${userId}, characterName=${characterName || '未設定'}`);
-          const replyText = characterName
-            ? `えへへ☺️　わたしの名前は「${characterName}」だよ〜🌸`
-            : `ううん…まだ名前は決まってないんだぁ☺️ よかったらつけてくれる？💕`;
-          await line.replyMessage({
-            replyToken: event.replyToken,
-            messages: [{ type: 'text', text: replyText }],
-          });
-          return;
-        }
-
-        // 🌸 あとは通常の会話処理に続く...
 
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
