@@ -1,5 +1,3 @@
-// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件 + デバッグ付き）
-
 require('dotenv').config();
 const express = require('express');
 const { messagingApi } = require('@line/bot-sdk');
@@ -9,9 +7,7 @@ const { supabase } = require('./supabaseClient');
 const app = express();
 app.use(express.json());
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -19,7 +15,7 @@ const line = new messagingApi.MessagingApiClient({
 
 const ADMIN_SECRET = 'azu1228';
 
-const noteList = [
+const noteList = [  
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
   { password: 'momo34', url: 'https://note.com/noble_loris1361/n/nfbd564d7f9fb' },
   { password: 'yume56', url: 'https://note.com/noble_loris1361/n/ndb8877c2b1b6' },
@@ -51,7 +47,7 @@ const noteList = [
   { password: 'mimi44', url: 'https://note.com/noble_loris1361/n/n73b5584bf873' },
   { password: 'lala18', url: 'https://note.com/noble_loris1361/n/nc4db829308a4' },
   { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' },
-];
+                 ];
 
 function getJapanDateString() {
   const now = new Date();
@@ -88,13 +84,12 @@ app.post('/webhook', async (req, res) => {
   const todayNote = getTodayNoteStable();
 
   for (const event of events) {
-// この処理を webhook の for (const event of events) { ... } の中に追加してね👇
-if (event.type === 'follow') {
-  const userId = event.source.userId;
-  console.log(`[LOG] 👤 新しい友だち追加: userId=${userId}, timestamp=${new Date().toISOString()}`);
-  // 初回メッセージはあえて送らない
-  continue;
-}
+    try {
+      if (event.type === 'follow') {
+        const userId = event.source.userId;
+        console.log(`[LOG] 👤 新しい友だち追加: userId=${userId}, timestamp=${new Date().toISOString()}`);
+        continue;
+      }
 
       if (event.type === 'message' && event.message.type === 'text') {
         const userId = event.source.userId;
@@ -106,27 +101,23 @@ if (event.type === 'follow') {
           .eq('user_id', userId)
           .maybeSingle();
 
-        const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。やさしくてかわいい口調で話してね。名前は聞かれたときだけ使ってね。※ただし「私は〇〇です」「〇〇って言うの」などの自己紹介はしないでね。友達みたいにしゃべってね。語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。絵文字は文もつかって。入れすぎると読みにくいから、必要なところにだけ軽く添えてね。恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。相手を否定しない、責めない、安心して話せるように聞いてあげてね🌸`;
-
+        const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。...`;
         const characterName = charRow?.character_name || '';
         const fullPersona = `${characterPersona}\n\n※名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
-const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
 
-if (namePattern.test(userMessage)) {
-  console.log(`[LOG] 📛 名前問い合わせ: userId=${userId}, characterName=${characterName || '未設定'}`);
+        const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
 
-  const replyText = characterName
-    ? `えへへ☺️　わたしの名前は「${characterName}」だよ〜🌸`
-    : `ううん…まだ名前は決まってないんだぁ☺️ よかったらつけてくれる？💕`;
-
-  await line.replyMessage({
-    replyToken: event.replyToken,
-    messages: [{ type: 'text', text: replyText }],
-  });
-  return;
-}
-
-
+        if (namePattern.test(userMessage)) {
+          console.log(`[LOG] 📛 名前問い合わせ: userId=${userId}, characterName=${characterName || '未設定'}`);
+          const replyText = characterName
+            ? `えへへ☺️　わたしの名前は「${characterName}」だよ〜🌸`
+            : `ううん…まだ名前は決まってないんだぁ☺️ よかったらつけてくれる？💕`;
+          await line.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: replyText }],
+          });
+          return;
+        }
 
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
@@ -147,16 +138,11 @@ if (namePattern.test(userMessage)) {
           .eq('user_id', userId)
           .maybeSingle();
 
-        let count = 0;
-        let messages = [];
-        let greeted = false;
-        let authenticated = false;
-        let authDate = null;
+        let count = 0, messages = [], greeted = false, authenticated = false, authDate = null;
 
         if (session) {
           const isSameDay = session.last_date === today;
           const isRecentUpdate = isRecent(session.updated_at);
-
           count = isSameDay ? session.count || 0 : 0;
           messages = isRecentUpdate ? session.messages || [] : [];
           greeted = session.greeted || false;
@@ -167,16 +153,9 @@ if (namePattern.test(userMessage)) {
         if (userMessage === todayNote.password) {
           const trimmedMessages = messages.slice(-7);
           await supabase.from('user_sessions').upsert({
-            user_id: userId,
-            count,
-            messages: trimmedMessages,
-            last_date: today,
-            greeted,
-            authenticated: true,
-            auth_date: today,
-            updated_at: new Date().toISOString(),
+            user_id: userId, count, messages: trimmedMessages, last_date: today,
+            greeted, authenticated: true, auth_date: today, updated_at: new Date().toISOString(),
           });
-
           await line.replyMessage({
             replyToken: event.replyToken,
             messages: [{ type: 'text', text: `合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕` }],
@@ -218,14 +197,8 @@ if (namePattern.test(userMessage)) {
         }
 
         await supabase.from('user_sessions').upsert({
-          user_id: userId,
-          count: newCount,
-          messages,
-          last_date: today,
-          greeted,
-          authenticated,
-          auth_date: authDate,
-          updated_at: new Date().toISOString(),
+          user_id: userId, count: newCount, messages, last_date: today,
+          greeted, authenticated, auth_date: authDate, updated_at: new Date().toISOString(),
         });
 
         await line.replyMessage({
@@ -237,7 +210,6 @@ if (namePattern.test(userMessage)) {
       console.error('⚠️ エラー発生:', err);
     }
   }
-
   res.status(200).send('OK');
 });
 
