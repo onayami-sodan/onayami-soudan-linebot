@@ -181,10 +181,10 @@ app.post('/webhook', async (req, res) => {
             const assistantMessage = chatResponse.choices[0].message;
             messages.push({ role: 'assistant', content: assistantMessage.content });
 
-            replyText = `${assistantMessage.content}\n\n🌸 続けて話したい方はこちらから合言葉を入手してね！\n👉 ${todayNote.url} 🔑`;
+            replyText = `${assistantMessage.content}\n\n明日になれば、またお話しできるよ🥰\n🌸 続けて話したい方はこちらから合言葉を入手してね！☺️\n👉 ${todayNote.url} 🔑`;
           } else {
             // 7回目以降
-            replyText = `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\nこのまま続けるなら、下のリンクから合言葉を入手してね☺️\n👉 ${todayNote.url}`;
+            replyText = `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\n🌸 続けて話したい方はこちらから合言葉を入手してね！☺️\n👉 ${todayNote.url}`;
           }
         }
 
