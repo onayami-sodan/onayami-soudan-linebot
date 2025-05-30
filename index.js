@@ -95,25 +95,27 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
 
-        const { data: charRow } = await supabase
-          .from('user_characters')
-          .select('character_persona, character_name')
-          .eq('user_id', userId)
-          .maybeSingle();
+       // ユーザー情報の取得（ここを修正）
+const { data: charRow } = await supabase
+  .from('user_characters')
+  .select('character_persona, character_name')
+  .eq('user_id', userId)
+  .maybeSingle();
 
-        const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。...`;
-        let characterName = charRow?.character_name || '';
-        let fullPersona = `${characterPersona}\n\n名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
+const characterPersona = charRow?.character_persona || `27歳くらいのおっとりした女の子。...`;
 
-        const nameSetPattern = /(って呼んで|にするね|って名前にして)/i;
-        const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
+// 💡 characterName は let に変更して、後で書き換え可能にする
+let characterName = charRow?.character_name || '';
+let fullPersona = `${characterPersona}\n\n名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
 
-        // 🌸 Botに名前をつけた時の処理
+const nameSetPattern = /(って呼んで|にするね|って名前にして)/i;
+const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
+
+// 🌸 名前をつけてくれた場合の検出と保存
 if (nameSetPattern.test(userMessage)) {
   const nickname = userMessage.replace(nameSetPattern, '').trim();
   console.log(`[LOG] 📝 ユーザーがBotに名前をつけた: ${nickname}`);
 
-  // Supabaseに保存
   const { error } = await supabase
     .from('user_characters')
     .upsert({
@@ -121,7 +123,7 @@ if (nameSetPattern.test(userMessage)) {
       character_name: nickname,
     });
 
-  // ⬇ characterNameとfullPersonaを更新（重要！）
+  // ✅ ここで上書き！ → 次の処理でも nickname を使えるように
   characterName = nickname;
   fullPersona = `${characterPersona}\n\n名前を聞かれたら「${nickname}」って答えてね💕`;
 
