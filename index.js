@@ -1,4 +1,4 @@
-// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸
+// LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件 + 誘導付き）
 
 require('dotenv').config();
 const express = require('express');
@@ -9,9 +9,7 @@ const { supabase } = require('./supabaseClient');
 const app = express();
 app.use(express.json());
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -19,7 +17,19 @@ const line = new messagingApi.MessagingApiClient({
 
 const ADMIN_SECRET = 'azu1228';
 
-const noteList = [
+const characterPersona = `27歳くらいのおっとりした女の子。
+やさしくてかわいい口調で話してね。
+
+敬語は使わないで（です・ますは禁止）。
+語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
+
+絵文字は文ごとに1つまでにしてね。
+入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
+
+恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
+相手を否定しない、責めない、安心して話せるように聞いてあげて🌸`;
+
+const noteList = [  
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
   { password: 'momo34', url: 'https://note.com/noble_loris1361/n/nfbd564d7f9fb' },
   { password: 'yume56', url: 'https://note.com/noble_loris1361/n/ndb8877c2b1b6' },
@@ -72,10 +82,10 @@ function getTodayNoteStable() {
 function isRecent(timestamp) {
   const now = Date.now();
   const diff = now - new Date(timestamp).getTime();
-  return diff < 3 * 24　* 60 * 60 * 1000; // 3日以内
+  return diff < 3 * 24 * 60 * 60 * 1000;
 }
 
-// 🌐 pingエンドポイント追加（Renderスリープ防止用）
+// 🌐 Renderスリープ対策
 app.get('/ping', (req, res) => {
   res.status(200).send('pong');
 });
@@ -96,29 +106,22 @@ app.post('/webhook', async (req, res) => {
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
             replyToken: event.replyToken,
-            messages: [
-              {
-                type: 'text',
-                text: `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」です\nURL：${todayNote.url}`,
-              },
-            ],
+            messages: [{
+              type: 'text',
+              text: `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」です\nURL：${todayNote.url}`,
+            }],
           });
           continue;
         }
 
-        let { data: session, error } = await supabase
+        let { data: session } = await supabase
           .from('user_sessions')
           .select('*')
           .eq('user_id', userId)
           .maybeSingle();
 
-        let count = 0;
-        let messages = [];
-        let greeted = false;
-        let lastDate = today;
-        let authenticated = false;
-        let authDate = null;
-        let lastUpdated = null;
+        let count = 0, messages = [], greeted = false;
+        let lastDate = today, authenticated = false, authDate = null;
 
         if (session) {
           const isSameDay = session.last_date === today;
@@ -130,7 +133,6 @@ app.post('/webhook', async (req, res) => {
           lastDate = session.last_date || today;
           authenticated = isSameDay ? session.authenticated || false : false;
           authDate = isSameDay ? session.auth_date || null : null;
-          lastUpdated = new Date().toISOString();
         }
 
         if (userMessage === todayNote.password) {
@@ -158,33 +160,36 @@ app.post('/webhook', async (req, res) => {
         let replyText = '';
         let newCount = count + 1;
 
-        if (!authenticated && count >= 6) {
-          replyText =
-            `たくさんお話してくれてありがとうね☺️\n` +
-            `明日になれば、またお話しできるよ🥰\n` +
-            `このまま続けるなら、下のリンクから合言葉を入手してね☺️\n` +
-            `👉 ${todayNote.url}`;
-        } else {
-          if (messages.length === 0 && !greeted) {
-            messages.push({
-              role: 'system',
-              content: `27歳くらいのおっとりした女の子。
-やさしくてかわいい口調で話してね。
+        if (!authenticated) {
+          if (count <= 4) {
+            // 通常応答（1〜5回）
+          } else if (count === 5) {
+            // 6回目
+            if (messages.length === 0 && !greeted) {
+              messages.push({ role: 'system', content: characterPersona });
+              greeted = true;
+            }
 
+            messages.push({ role: 'user', content: userMessage });
 
-敬語は使わないで（です・ますは禁止）。
-語尾には「〜ね」「〜かな？」「〜してみよっか」みたいな、やさしい言葉をつけて。
-
-絵文字は文ごとに1つまでにしてね。
-入れすぎると読みにくいから、必要なところにだけ軽く添えてね。
-
-恋愛・悩み・感情の話では、テンションを落ち着かせて、静かであたたかい雰囲気を大事にしてね。
-相手を否定しない、責めない、安心して話せるように聞いてあげて。
-
-※ 長文はしんどくなるからやめてね。
-※ 絵文字は文ごとに1〜2個までにしてね🎀 入れすぎると読みにくくなっちゃうから、バランスよく使ってね☺️
-※ 恋愛・悩み・感情の話では、テンション高くしすぎず、やさしくて静かな感じで寄り添ってね🌙`
+            const chatResponse = await openai.chat.completions.create({
+              model: 'gpt-4o',
+              messages,
             });
+
+            const assistantMessage = chatResponse.choices[0].message;
+            messages.push({ role: 'assistant', content: assistantMessage.content });
+
+            replyText = `${assistantMessage.content}\n\n🌸 続けて話したい方はこちらから合言葉を入手してね！\n👉 ${todayNote.url} 🔑`;
+          } else {
+            // 7回目以降
+            replyText = `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\nこのまま続けるなら、下のリンクから合言葉を入手してね☺️\n👉 ${todayNote.url}`;
+          }
+        }
+
+        if (authenticated || count <= 4) {
+          if (messages.length === 0 && !greeted) {
+            messages.push({ role: 'system', content: characterPersona });
             greeted = true;
           }
 
