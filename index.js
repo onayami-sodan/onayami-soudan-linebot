@@ -109,36 +109,38 @@ app.post('/webhook', async (req, res) => {
         const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
 
         // 🌸 Botに名前をつけた時の処理
-        if (nameSetPattern.test(userMessage)) {
-          const nickname = userMessage.replace(nameSetPattern, '').trim();
-          console.log(`[LOG] 📝 ユーザーがBotに名前をつけた: ${nickname}`);
+if (nameSetPattern.test(userMessage)) {
+  const nickname = userMessage.replace(nameSetPattern, '').trim();
+  console.log(`[LOG] 📝 ユーザーがBotに名前をつけた: ${nickname}`);
 
-          const { error } = await supabase
-            .from('user_characters')
-            .upsert({
-              user_id: userId,
-              character_name: nickname,
-            });
+  // Supabaseに保存
+  const { error } = await supabase
+    .from('user_characters')
+    .upsert({
+      user_id: userId,
+      character_name: nickname,
+    });
 
-          characterName = nickname;
-          fullPersona = `${characterPersona}\n\n名前を聞かれたら「${nickname}」って答えてね💕`;
+  // ⬇ characterNameとfullPersonaを更新（重要！）
+  characterName = nickname;
+  fullPersona = `${characterPersona}\n\n名前を聞かれたら「${nickname}」って答えてね💕`;
 
-          if (error) {
-            console.error(`[ERROR] ❌ 名前の保存に失敗:`, error);
-          } else {
-            console.log(`[LOG] 💾 キャラクター名を保存: ${nickname}`);
-          }
+  if (error) {
+    console.error(`[ERROR] ❌ 名前の保存に失敗:`, error);
+  } else {
+    console.log(`[LOG] 💾 キャラクター名を保存: ${nickname}`);
+  }
 
-          await line.replyMessage({
-            replyToken: event.replyToken,
-            messages: [{
-              type: 'text',
-              text: `うれしい〜☺️ じゃあ『${nickname}』って呼んでくれるんだね💕よろしくね〜✨`,
-            }],
-          });
+  await line.replyMessage({
+    replyToken: event.replyToken,
+    messages: [{
+      type: 'text',
+      text: `うれしい〜☺️ じゃあ『${nickname}』って呼んでくれるんだね💕よろしくね〜✨`,
+    }],
+  });
 
-          return;
-        }
+  return;
+}
 
         // 🌸 Botの名前を聞かれたときの返答
         if (namePattern.test(userMessage)) {
