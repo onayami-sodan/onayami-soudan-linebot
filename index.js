@@ -120,6 +120,7 @@ if (nameSetPattern.test(userMessage)) {
       user_id: userId,
       character_name: nickname,
     });
+characterName = nickname;
 
   if (error) {
     console.error(`[ERROR] ❌ 名前の保存に失敗:`, error);
