@@ -135,27 +135,28 @@ app.post('/webhook', async (req, res) => {
           authDate = isSameDay ? session.auth_date || null : null;
         }
 
-        if (userMessage === todayNote.password) {
-          await supabase.from('user_sessions').upsert({
-            user_id: userId,
-            count,
-            messages: messages.slice(-6),
-            last_date: today,
-            greeted,
-            authenticated: true,
-            auth_date: today,
-            updated_at: new Date().toISOString(),
-          });
+  if (userMessage === todayNote.password) {
+  await supabase.from('user_sessions').upsert({
+    user_id: userId,
+    count,
+    messages, // ← 修正ポイント
+    last_date: today,
+    greeted,
+    authenticated: true,
+    auth_date: today,
+    updated_at: new Date().toISOString(),
+  });
 
-          await line.replyMessage({
-            replyToken: event.replyToken,
-            messages: [{
-              type: 'text',
-              text: `合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕`
-            }],
-          });
-          continue;
-        }
+  await line.replyMessage({
+    replyToken: event.replyToken,
+    messages: [{
+      type: 'text',
+      text: `合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕`
+    }],
+  });
+  continue;
+}
+
 
         let replyText = '';
         let newCount = count + 1;
