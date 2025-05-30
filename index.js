@@ -88,7 +88,14 @@ app.post('/webhook', async (req, res) => {
   const todayNote = getTodayNoteStable();
 
   for (const event of events) {
-    try {
+// この処理を webhook の for (const event of events) { ... } の中に追加してね👇
+if (event.type === 'follow') {
+  const userId = event.source.userId;
+  console.log(`[LOG] 👤 新しい友だち追加: userId=${userId}, timestamp=${new Date().toISOString()}`);
+  // 初回メッセージはあえて送らない
+  continue;
+}
+
       if (event.type === 'message' && event.message.type === 'text') {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
@@ -103,19 +110,23 @@ app.post('/webhook', async (req, res) => {
 
         const characterName = charRow?.character_name || '';
         const fullPersona = `${characterPersona}\n\n※名前を聞かれたら「${characterName || 'まだ名前は決まってないよ〜☺️'}」って答えてね💕`;
+const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
 
-        const namePattern = /名前.*(教えて|なに|何|知りたい)/i;
-        if (namePattern.test(userMessage)) {
-          const replyText = characterName
-            ? `えへへ☺️　わたしの名前は「${characterName}」だよ〜🌸`
-            : `ううん…まだ名前は決まってないんだぁ☺️ よかったらつけてくれる？💕`;
+if (namePattern.test(userMessage)) {
+  console.log(`[LOG] 📛 名前問い合わせ: userId=${userId}, characterName=${characterName || '未設定'}`);
 
-          await line.replyMessage({
-            replyToken: event.replyToken,
-            messages: [{ type: 'text', text: replyText }],
-          });
-          return;
-        }
+  const replyText = characterName
+    ? `えへへ☺️　わたしの名前は「${characterName}」だよ〜🌸`
+    : `ううん…まだ名前は決まってないんだぁ☺️ よかったらつけてくれる？💕`;
+
+  await line.replyMessage({
+    replyToken: event.replyToken,
+    messages: [{ type: 'text', text: replyText }],
+  });
+  return;
+}
+
+
 
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
