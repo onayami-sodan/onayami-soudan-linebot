@@ -72,7 +72,7 @@ function getTodayNoteStable() {
 function isRecent(timestamp) {
   const now = Date.now();
   const diff = now - new Date(timestamp).getTime();
-  return diff < 12 * 60 * 60 * 1000; // 12時間以内
+  return diff < 3 * 24　* 60 * 60 * 1000; // 3日以内
 }
 
 // 🌐 pingエンドポイント追加（Renderスリープ防止用）
