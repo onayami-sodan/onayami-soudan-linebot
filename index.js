@@ -175,7 +175,11 @@ app.post('/webhook', async (req, res) => {
               greeted = true;
             }
 
-            messages.push({ role: 'user', content: userMessage });
+           messages.push({
+  role: 'user',
+  content: `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください。\n\n${userMessage}`
+})
+
 
             const chatResponse = await openai.chat.completions.create({
   model: 'gpt-4o',
