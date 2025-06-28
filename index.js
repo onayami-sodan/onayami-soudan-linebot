@@ -166,10 +166,10 @@ app.post('/webhook', async (req, res) => {
         let newCount = count + 1;
 
         if (!authenticated) {
-          if (count <= 4) {
-            // 通常応答（1〜5回）
-          } else if (count === 5) {
-            // 6回目
+          if (count <= 3) {
+            // 通常応答（1〜4回）
+          } else if (count === 4) {
+            // 5回目
             if (messages.length === 0 && !greeted) {
               messages.push({ role: 'system', content: characterPersona });
               greeted = true;
@@ -184,7 +184,7 @@ app.post('/webhook', async (req, res) => {
             const chatResponse = await openai.chat.completions.create({
   model: 'gpt-4o',
   messages,
-  max_tokens: 100, // ←★ここを追加！
+  
 });
 
 
@@ -193,12 +193,12 @@ app.post('/webhook', async (req, res) => {
 
             replyText = `${assistantMessage.content}\n\n明日になれば、またお話しできるよ🥰\n🌸 続けて話したい方はこちらから合言葉を入手してね！☺️\n👉 ${todayNote.url} 🔑`;
           } else {
-            // 7回目以降
+            // 5回目以降
             replyText = `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\n🌸 続けて話したい方はこちらから合言葉を入手してね！☺️\n👉 ${todayNote.url}`;
           }
         }
 
-        if (authenticated || count <= 4) {
+        if (authenticated || count <= 3) {
           if (messages.length === 0 && !greeted) {
             messages.push({ role: 'system', content: characterPersona });
             greeted = true;
@@ -209,7 +209,7 @@ app.post('/webhook', async (req, res) => {
           const chatResponse = await openai.chat.completions.create({
   model: 'gpt-4o',
   messages,
-  max_tokens: 100, // ←★ここを追加！
+  
 });
 
 
