@@ -174,9 +174,11 @@ app.post('/webhook', async (req, res) => {
             messages.push({ role: 'user', content: userMessage });
 
             const chatResponse = await openai.chat.completions.create({
-              model: 'gpt-4o',
-              messages,
-            });
+  model: 'gpt-4o',
+  messages,
+  max_tokens: 100, // ←★ここを追加！
+});
+
 
             const assistantMessage = chatResponse.choices[0].message;
             messages.push({ role: 'assistant', content: assistantMessage.content });
@@ -197,9 +199,11 @@ app.post('/webhook', async (req, res) => {
           messages.push({ role: 'user', content: userMessage });
 
           const chatResponse = await openai.chat.completions.create({
-            model: 'gpt-4o',
-            messages,
-          });
+  model: 'gpt-4o',
+  messages,
+  max_tokens: 100, // ←★ここを追加！
+});
+
 
           const assistantMessage = chatResponse.choices[0].message;
           messages.push({ role: 'assistant', content: assistantMessage.content });
