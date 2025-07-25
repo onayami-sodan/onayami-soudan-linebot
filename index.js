@@ -97,7 +97,20 @@ app.post('/webhook', async (req, res) => {
         const userId = event.source.userId;
         const userMessage = event.message.text.trim();
 const characterPersona = await getCharacterPrompt(userId);
-        
+  // --- 短答テンプレ適用チェック ---
+const needsShortAnswer = /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/.test(userMessage);
+
+// systemPromptを決定（短答テンプレつき or 通常）
+const systemPrompt = needsShortAnswer
+  ? `${characterPrompt}
+
+【ルール】以下を必ず守って答えて
+- 結論を最初に出す（YES / NO / やめた方がいい など）
+- 最大3行まで
+- 回りくどい共感・曖昧表現は禁止
+- 一度で終わる返答を意識`
+  : characterPrompt;
+      
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
             replyToken: event.replyToken,
