@@ -176,7 +176,7 @@ const systemPrompt = needsShortAnswer
           } else if (count === 4) {
             // 5回目
             if (messages.length === 0 && !greeted) {
-              messages.push({ role: 'system', content: characterPersona });
+              messages.push({ role: 'system', content: systemPrompt });
               greeted = true;
             }
 
@@ -205,7 +205,7 @@ const systemPrompt = needsShortAnswer
 
         if (authenticated || count <= 3) {
           if (messages.length === 0 && !greeted) {
-            messages.push({ role: 'system', content: characterPersona });
+            messages.push({ role: 'system', content: systemPrompt });
             greeted = true;
           }
 
