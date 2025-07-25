@@ -175,10 +175,10 @@ const systemPrompt = needsShortAnswer
             // 通常応答（1〜4回）
           } else if (count === 4) {
             // 5回目
-            if (messages.length === 0 && !greeted) {
-              messages.push({ role: 'system', content: systemPrompt });
-              greeted = true;
-            }
+           if (messages.length === 0 && !greeted) {
+  messages.push({ role: 'system', content: systemPrompt }); // ← 修正済み！
+  greeted = true;
+}
 
            messages.push({
   role: 'user',
@@ -205,9 +205,10 @@ const systemPrompt = needsShortAnswer
 
         if (authenticated || count <= 3) {
           if (messages.length === 0 && !greeted) {
-            messages.push({ role: 'system', content: systemPrompt });
-            greeted = true;
-          }
+  messages.push({ role: 'system', content: systemPrompt }); // ← 短答テンプレ付きに！
+  greeted = true;
+}
+
 
           messages.push({ role: 'user', content: userMessage });
 
