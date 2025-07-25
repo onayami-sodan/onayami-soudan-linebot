@@ -102,14 +102,15 @@ const needsShortAnswer = /どう思う|どうすれば|した方がいい|どう
 
 // systemPromptを決定（短答テンプレつき or 通常）
 const systemPrompt = needsShortAnswer
-  ? `${characterPrompt}
-
+  ? `${characterPersona}
 【ルール】以下を必ず守って答えて
-- 結論を最初に出す（YES / NO / やめた方がいい など）
-- 最大3行まで
-- 回りくどい共感・曖昧表現は禁止
-- 一度で終わる返答を意識`
-  : characterPrompt;
+・結論を最初に出す（YES / NO / やめた方がいい など）
+・最大3行まで
+・回りくどい共感・曖昧表現は禁止
+・一度で終わる返答を意識
+`
+  : characterPersona;
+
       
         if (userMessage === ADMIN_SECRET) {
           await line.replyMessage({
