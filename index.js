@@ -1,21 +1,23 @@
 // LINE Bot：セッション履歴保持つき 完全安定バージョン🌸（note 31件 + 誘導付き）
 // 返事が来ない対策：OpenAI呼び出しを aiChat() に集約し、insufficient_quota 等でも必ず返信
+// 電話相談のやわらか案内対応（「予約」から予約してね）
 
 require("dotenv").config()
 const express = require("express")
 const { messagingApi } = require("@line/bot-sdk")
 const OpenAI = require("openai")
 const { supabase } = require("./supabaseClient")
-const { getCharacterPrompt } = require("./userSettings") // ← ここはimportだけ
+const { getCharacterPrompt } = require("./userSettings") // importのみ
 
 const app = express()
 app.use(express.json())
 
 // OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini" // 必要なら env で gpt-4o に
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini"
 const TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE || 0.8)
 const MAX_TOKENS = Number(process.env.OPENAI_MAX_TOKENS || 700)
+console.log("🔧 Using model:", MODEL)
 
 // 共通：OpenAI呼び出しを安全に実行して、必ず text を返す
 async function aiChat(messages) {
@@ -53,19 +55,23 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 })
 
-// LINE返信を落ちないように包む
-async function safeReply(replyToken, text) {
+// LINE返信を落ちないように包む（テキスト or メッセージオブジェクト配列 どちらもOK）
+async function safeReply(replyToken, payloadOrText) {
   try {
-    await line.replyMessage({
-      replyToken,
-      messages: [{ type: "text", text }],
-    })
+    const messages =
+      typeof payloadOrText === "string"
+        ? [{ type: "text", text: payloadOrText }]
+        : Array.isArray(payloadOrText)
+        ? payloadOrText
+        : [payloadOrText]
+    await line.replyMessage({ replyToken, messages })
   } catch (e) {
     console.error("❌ LINE返信エラー:", e?.status || "", e?.message || e)
   }
 }
 
 const ADMIN_SECRET = "azu1228"
+const RESERVE_URL = process.env.RESERVE_URL || ""
 
 // ---- note 一覧 ----
 const noteList = [
@@ -125,6 +131,13 @@ function isRecent(timestamp) {
   return diff < 3 * 24 * 60 * 60 * 1000
 }
 
+// 📞 電話相談の問い合わせ検知（やわらかワード含む）
+function isPhoneInquiry(text = "") {
+  return /(電話|でんわ|通話).*(相談|可能|できる|予約|やってる)|相談.*(電話|通話)|電話予約|通話したい|電話したい/.test(
+    text
+  )
+}
+
 // 🌐 Render スリープ対策
 app.get("/ping", (req, res) => {
   res.status(200).send("pong")
@@ -158,10 +171,35 @@ app.post("/webhook", async (req, res) => {
 
         // 管理者パス
         if (userMessage === ADMIN_SECRET) {
-          await safeReply(
-            event.replyToken,
-            `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」です\nURL：${todayNote.url}`
-          )
+          await safeReply(event.replyToken, `✨ 管理者モード
+本日(${today})のnoteパスワードは「${todayNote.password}」
+URL：${todayNote.url}
+🔧 Model: ${MODEL}`)
+          continue
+        }
+
+        // 📞 電話相談案内（カウント消費なし）
+        if (isPhoneInquiry(userMessage)) {
+          const baseText =
+            "電話でもお話しできるよ📞\n" +
+            "リッチメニューの「予約」からかんたんに予約してね\n" +
+            "お電話はAIじゃなくて人の相談員がやさしく寄りそうよ🌸"
+          if (RESERVE_URL) {
+            await safeReply(event.replyToken, {
+              type: "text",
+              text: baseText,
+              quickReply: {
+                items: [
+                  {
+                    type: "action",
+                    action: { type: "uri", label: "予約ページを開く", uri: RESERVE_URL },
+                  },
+                ],
+              },
+            })
+          } else {
+            await safeReply(event.replyToken, baseText)
+          }
           continue
         }
 
@@ -204,10 +242,7 @@ app.post("/webhook", async (req, res) => {
             updated_at: new Date().toISOString(),
           })
 
-          await safeReply(
-            event.replyToken,
-            "合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕"
-          )
+          await safeReply(event.replyToken, "合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕")
           continue
         }
 
@@ -226,18 +261,14 @@ app.post("/webhook", async (req, res) => {
             // 1〜4回目は通常回答
             messages.push({ role: "user", content: userMessage })
             const result = await aiChat(messages)
-            if (result.ok) {
-              messages.push({ role: "assistant", content: result.text })
-              replyText = result.text
-            } else {
-              replyText = result.text
-            }
+            replyText = result.text
+            if (result.ok) messages.push({ role: "assistant", content: result.text })
           } else if (count === 4) {
             // 5回目は誘導付き回答
             messages.push({
               role: "user",
               content:
-                `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください。\n\n` +
+                `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください\n\n` +
                 userMessage,
             })
             const result = await aiChat(messages)
@@ -245,7 +276,6 @@ app.post("/webhook", async (req, res) => {
               messages.push({ role: "assistant", content: result.text })
               replyText = `${result.text}\n\n明日になれば、またお話しできるよ🥰\n🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url} 🔑`
             } else {
-              // 枠切れ等のときは誘導文は付けずにお詫びだけ返す
               replyText = result.text
             }
           } else {
@@ -256,12 +286,8 @@ app.post("/webhook", async (req, res) => {
           // 認証済みは無制限
           messages.push({ role: "user", content: userMessage })
           const result = await aiChat(messages)
-          if (result.ok) {
-            messages.push({ role: "assistant", content: result.text })
-            replyText = result.text
-          } else {
-            replyText = result.text
-          }
+          replyText = result.text
+          if (result.ok) messages.push({ role: "assistant", content: result.text })
         }
 
         // セッション保存
@@ -280,7 +306,10 @@ app.post("/webhook", async (req, res) => {
       }
     } catch (err) {
       console.error("⚠️ Webhook処理エラー:", err)
-      // 失敗しても他イベントには影響させない
+      // 念のためユーザーへも一言（すでに返信済みならsafeReply側で握る）
+      try {
+        await safeReply(req.body.events?.[0]?.replyToken, "ごめんね いま通信が不安定みたい もう一度だけ送ってみてね🌷")
+      } catch (_) {}
     }
   }
 
