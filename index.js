@@ -132,23 +132,21 @@ function isRecent(timestamp) {
 }
 
 // 📞 電話相談の問い合わせ検知（やわらかワード含む）
-- function isPhoneInquiry(text = "") {
--   return /(電話|でんわ|通話).*(相談|可能|できる|予約|やってる)|相談.*(電話|通話)|電話予約|通話したい|電話したい/.test(text)
-- }
-+ function isPhoneInquiry(text = "") {
-+   const s = (text || "").toLowerCase().replace(/\s+/g, "")
-+   // 電話番号系は除外
-+   if (/電話番号|tel[:：]?/.test(s)) return false
-+   return (
-+     /^(電話|でんわ|通話)$/.test(s) || // 単語だけでも反応
-+     // 電話→意図 の順
-+     /(電話|でんわ|通話).*(相談|予約|できる|可能|ok|おk|話せ|話す|したい|たい|対応|やってる|お願い|\?|？)/.test(s) ||
-+     // 意図→電話 の順
-+     /(相談|予約|できる|可能|ok|おk|話せ|話す|したい|たい|対応|やってる|お願い).*(電話|でんわ|通話)/.test(s) ||
-+     // そのままの複合語
-+     /(電話相談|電話予約|通話相談)/.test(s)
-+   )
-+ }
+function isPhoneInquiry(text = "") {
+  const s = (text || "").toLowerCase().replace(/\s+/g, "")
+  // 電話番号系は除外
+  if (/電話番号|tel[:：]?/.test(s)) return false
+  return (
+    /^(電話|でんわ|通話)$/.test(s) || // 単語だけでも反応
+    // 電話 → 意図
+    /(電話|でんわ|通話).*(相談|予約|できる|可能|ok|おk|話せ|話す|したい|たい|対応|やってる|お願い|\?|？)/.test(s) ||
+    // 意図 → 電話
+    /(相談|予約|できる|可能|ok|おk|話せ|話す|したい|たい|対応|やってる|お願い).*(電話|でんわ|通話)/.test(s) ||
+    // そのままの複合語
+    /(電話相談|電話予約|通話相談)/.test(s)
+  )
+}
+
 
 
 // 🌐 Render スリープ対策
@@ -333,4 +331,5 @@ const port = process.env.PORT || 3000
 app.listen(port, () => {
   console.log(`✅ LINEボットがポート ${port} で起動中`)
 })
+
 
