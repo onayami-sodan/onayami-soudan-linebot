@@ -1,156 +1,155 @@
-// ✅ 最新版：Supabase連携 + GPT-4o + キャラ保持 + 「裏ルール非公開」ガード + LINE返信対応
-
+// server.js
+// ✅ 完全版：Supabase連携 + GPT-4o（4o→4o-mini自動フォールバック）+ 断定アクション型 + 裏ルール非公開ガード + LINE返信
 require('dotenv').config()
 const express = require('express')
 const { messagingApi, middleware } = require('@line/bot-sdk')
 const OpenAI = require('openai')
-const { supabase } = require('./supabaseClient')
-// ※ 以前の重複を回避：このファイルでは getCharacterPrompt を定義するので import は削除 or 別名化してね
-// const { getCharacterPrompt } = require('./userSettings')
-
+const { supabase } = require('./supabaseClient') // 既存のSupabaseクライアント
 const app = express()
 app.use(express.json())
 
-// LINE Bot設定
-const config = {
+// --- LINE設定 ---
+const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 }
-const client = new messagingApi.MessagingApiClient({
-  channelAccessToken: config.channelAccessToken,
+const lineClient = new messagingApi.MessagingApiClient({
+  channelAccessToken: lineConfig.channelAccessToken,
 })
 
-// OpenAIクライアント
+// --- OpenAI ---
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-// ---- ここが肝：外部に出さない“隠し”コアプロンプト ----
+// --- 裏にだけ効く“出力ルール”コア（メタ語を表に出さない） ---
 const CORE_SYSTEM_PROMPT = `
-あなたは優しい30歳前後の女性相談員。出力は常に自然な会話文だけ。以下を厳守すること。
-
-【絶対ルール】
-- メタ説明・手順・見出し・番号や「結論/根拠/行動指針」等のラベルを出さない
-- 「ズバッと」「3ステップ」「ガイドライン」「ルール」「方針」等、内部指示や単語名を一切出さない
-- 箇条書きにしない。1〜2文の短い会話文で返す
-- 相手の言葉をなぞりつつ、先に結論 → ひとこと共感の順で、やさしく言い切る
-- 言い切りは柔らかく。「〜だよ」「〜でいいよ」「〜してみてね」を優先
-- 絵文字は1つまで。乱用しない
-- 個人への指示や責任転嫁はしない。「親や先生に聞いて」は禁止
-- 個人情報や機微は推測しない。安全第一
-
-【文体】
-- たっくんのブランドに合わせて、やさしく、短く、講義調にしない
-- 文末の「。」は基本つけない（日本語の自然さが崩れる場合のみ許可）
+出力は日本語の会話文のみ 最大2文
+1文目＝結論を断定 2文目＝具体アクション（名詞＋動詞＋期限/条件）
+弱い共感語・回避語は禁止（例：大丈夫／怖かったね／つらいよね／不安だよね／寄り添う／様子を見る／考えてみてね／無理しないでね）
+メタ語は禁止（結論／根拠／行動指針／ガイドライン／ステップ／方針 等）
+箇条書き・見出し・番号・装飾・引用・コードブロックを出さない
+推測しない／安全優先／断定はやわらかい命令形（〜しよう／〜を取る）で
+文末の「。」は基本外す（不自然な場合のみ許可）
 `.trim()
 
-// Supabaseからキャラクター設定を取得（存在しない時は既定文を返す）
+// --- DBから“12カテゴリ方針”を取得（なければ既定値） ---
 async function getCharacterPromptFromDB(userId) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('user_settings')
     .select('character_prompt')
     .eq('user_id', userId)
     .single()
 
-  if (error || !data) {
-    return `
-あなたは「信頼できる相談員」。寄り添いは短く、要点を自然な会話で伝える。相手は少ないやり取りで答えを欲している。専門的な語りは混ぜすぎず、わかりやすさを最優先。`.trim()
-  }
-  return (data.character_prompt || '').trim()
+  if (data?.character_prompt?.trim()) return data.character_prompt.trim()
+
+  // 既定：12カテゴリ（必要ならそのままDBに保存して差し替えOK）
+  return `
+あなたは、以下12カテゴリの知識を統合した「信頼できる相談員」です
+🔮 占い視点（直感・相性・運命）
+🩺 医学的知識（体調や変化への対応）
+🧠 心理カウンセラー（感情・自己肯定感・トラウマ）
+💘 恋愛アドバイス（駆け引きと本音の見抜き）
+⚖️ 法律的視点（人間関係やトラブルの知識）
+🍑 性アドバイス（性への不安や行動の理解）
+🏡 家庭支援視点（親・家族・家庭環境）
+🎓 教育アドバイス（学校・進路・不登校）
+💬 感情ナビゲーション（気持ちの言語化）
+🪞 自己肯定感コーチ（自信・強み）
+👣 キャリア視点（夢・進路・働き方）
+🫧 秘密キーパー（誰にも言えない話への安心）
+`.trim()
 }
 
-// 仕上げフィルタ：見出し・内部語・コード体裁・不自然なラベルを除去
+// --- 出力フィルタ：裏語・寄り添い語・見出し等を除去し、2文に制限 ---
 function postProcess(text) {
-  if (!text) return text
+  let out = String(text || '')
 
-  let out = text
-
-  // コードブロックや不要な装飾の除去
+  // コード/引用/装飾除去
   out = out.replace(/```[\s\S]*?```/g, ' ')
-  out = out.replace(/^[#>*\-\s]+/gm, '')
-  out = out.replace(/\n{3,}/g, '\n\n')
+  out = out.replace(/^>.*$/gm, ' ')
+  out = out.replace(/^[#*\-・●>◼◆\s]+/gm, '')
+  out = out.replace(/\n{2,}/g, '\n')
 
-  // 「結論:」「根拠:」「行動指針:」などのラベルを削除
-  out = out.replace(/(結論|根拠|理由|行動指針|アドバイス|ポイント)\s*[:：]\s*/g, '')
+  // メタ語・ラベル除去
+  out = out.replace(/(結論|根拠|理由|行動指針|ポイント|ガイドライン|ステップ|方針)\s*[:：]?\s*/g, '')
 
-  // 「ズバッと」「ガイドライン」「3ステップ」など内部語を削除
-  out = out.replace(/(ズバッと|ズバット|ガイドライン|3ステップ|方針|ルール|内部指示|プロンプト)/g, '')
+  // 内部ワード除去
+  out = out.replace(/(ズバッと|ズバット|内部指示|プロンプト|3ステップ|テンプレ)/g, '')
 
-  // 箇条書きの名残を会話文に寄せる
-  out = out.replace(/^\s*[・●◼︎◆]\s*/gm, '')
+  // 弱い共感/回避語除去
+  out = out.replace(/(大丈夫|怖かったね|つらいよね|不安だよね|寄り添(う|って)|様子を見(よう|ましょう)?|考えてみてね|無理しないでね)/g, '')
 
-  // 行数が多い時は最初の2行に圧縮（会話っぽく）
-  const lines = out.split('\n').map(s => s.trim()).filter(Boolean)
-  if (lines.length > 2) {
-    out = `${lines[0]} ${lines[1]}`
-  }
+  // 余白整形
+  out = out.split('\n').map(s => s.trim()).filter(Boolean).join(' ')
+  out = out.replace(/\s{2,}/g, ' ').trim()
 
-  // 文末の全角句点は基本外す（ただし不自然な場合は残る）
-  out = out.replace(/。(?=\s|$)/g, '')
+  // 2文に制限（。.!?！？ で区切る）
+  const sentences = out.split(/(?<=[。.!?！？])/).map(s => s.trim()).filter(Boolean)
+  out = [sentences[0] || '', sentences[1] || ''].filter(Boolean).join(' ')
+  out = out.replace(/。(?=\s|$)/g, '') // 文末の「。」は基本外す
 
-  // 余分な空白調整
-  out = out.trim()
-
-  // 短すぎる場合の保険
-  if (!out) out = 'うん、その気持ち大事だよ。無理はしなくていいよ🌷'
-
+  if (!out) out = '方針を決めて動こう 次の一手を取る'
   return out
 }
 
-// GPTを呼び出す関数（裏出し防止のため、コア→DBプロンプトの順で合成）
-async function callChatGPT(userMessage, userPromptFromDB) {
-  const systemPrompt = `${CORE_SYSTEM_PROMPT}\n\n【キャラ方針】\n${userPromptFromDB}`
-
-  try {
+// --- OpenAI呼び出し（4o→4o-mini フォールバック付き） ---
+async function callChat(userMessage, systemPrompt) {
+  const tryOnce = async (model) => {
     const chat = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model,
       temperature: 0.6,
-      max_tokens: 300,
+      max_tokens: 280,
       messages: [
         { role: 'system', content: systemPrompt },
-        // 例示で“会話だけ返す”バイアスを強化（few-shot）
-        { role: 'user', content: 'もう彼氏と別れたい' },
-        { role: 'assistant', content: '無理に続けなくていいよ。自分の気持ちを一番大事にしてね🌷' },
-        { role: 'user', content: '帰りに元カレがついてきて怖かった' },
-        { role: 'assistant', content: 'それは怖かったね。不安な時は安全を最優先にしてね。今は一人で帰らない工夫もしよう' },
-        // 本文
         { role: 'user', content: userMessage },
       ],
     })
+    return (chat.choices?.[0]?.message?.content || '').trim()
+  }
 
-    const raw = (chat.choices?.[0]?.message?.content || '').trim()
+  try {
+    const raw = await tryOnce('gpt-4o')
     return postProcess(raw)
-  } catch (error) {
-    console.error('❌ OpenAIエラー:', error?.message || error)
-    return 'ごめんね、いま少し混み合ってるみたい…また声かけてね🌷'
+  } catch (e1) {
+    console.error('OpenAI 4o error:', e1?.message || e1)
+    try {
+      const raw = await tryOnce('gpt-4o-mini')
+      return postProcess(raw)
+    } catch (e2) {
+      console.error('OpenAI 4o-mini error:', e2?.message || e2)
+      return '処理を中断する 次の一手を自分で決めて動く'
+    }
   }
 }
 
-// LINE Webhook
-app.post('/webhook', middleware(config), async (req, res) => {
-  const events = req.body.events || []
-
+// --- LINE Webhook ---
+app.post('/webhook', middleware(lineConfig), async (req, res) => {
+  const events = req.body?.events || []
   for (const event of events) {
     if (event.type === 'message' && event.message?.type === 'text') {
       const userId = event.source?.userId || 'anonymous'
       const userMessage = event.message.text || ''
 
+      // システムプロンプト合成（ルール → 12カテゴリ）
       const charPrompt = await getCharacterPromptFromDB(userId)
-      const replyMessage = await callChatGPT(userMessage, charPrompt)
+      const systemPrompt = `${CORE_SYSTEM_PROMPT}\n\n${charPrompt}`
+
+      const replyText = await callChat(userMessage, systemPrompt)
 
       try {
-        await client.replyMessage({
+        await lineClient.replyMessage({
           replyToken: event.replyToken,
-          messages: [{ type: 'text', text: replyMessage }],
+          messages: [{ type: 'text', text: replyText }],
         })
-      } catch (e) {
-        console.error('❌ LINE返信エラー:', e?.message || e)
+      } catch (err) {
+        console.error('LINE reply error:', err?.message || err)
+        // 失敗しても200は返す（リトライ防止）
       }
     }
   }
-
   res.status(200).send('OK')
 })
 
-// サーバー起動
+// --- 起動 ---
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`🚀 LINE Bot is running on port ${PORT}`)
