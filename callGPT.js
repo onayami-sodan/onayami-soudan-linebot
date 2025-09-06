@@ -1,14 +1,16 @@
 // server.js
-// ✅ 完全版：Supabase連携 + GPT-4o（4o→4o-mini自動フォールバック）+ 断定アクション型 + 裏ルール非公開ガード + LINE返信
+// ✅ LINE × OpenAI × Supabase 完全版（断定アクション型・裏ルール非公開）
+
 require('dotenv').config()
 const express = require('express')
 const { messagingApi, middleware } = require('@line/bot-sdk')
 const OpenAI = require('openai')
-const { supabase } = require('./supabaseClient') // 既存のSupabaseクライアント
+const { supabase } = require('./supabaseClient')
+
 const app = express()
 app.use(express.json())
 
-// --- LINE設定 ---
+// --- LINE ---
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -20,18 +22,20 @@ const lineClient = new messagingApi.MessagingApiClient({
 // --- OpenAI ---
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-// --- 裏にだけ効く“出力ルール”コア（メタ語を表に出さない） ---
+// --- 出力ルール（裏だけで効くコア） ---
 const CORE_SYSTEM_PROMPT = `
 出力は日本語の会話文のみ 最大2文
 1文目＝結論を断定 2文目＝具体アクション（名詞＋動詞＋期限/条件）
-弱い共感語・回避語は禁止（例：大丈夫／怖かったね／つらいよね／不安だよね／寄り添う／様子を見る／考えてみてね／無理しないでね）
-メタ語は禁止（結論／根拠／行動指針／ガイドライン／ステップ／方針 等）
+占い・相性・星座・タロット等は助言として扱ってよい（簡潔に）
+医療・健康は一般情報とセルフケアは扱ってよいが診断断定と処方はしない
+弱い共感語・回避語は禁止（大丈夫/怖かったね/つらいよね/不安だよね/寄り添う/様子を見る/考えてみてね/無理しないでね）
+メタ語は禁止（結論/根拠/行動指針/ガイドライン/ステップ/方針 等）
 箇条書き・見出し・番号・装飾・引用・コードブロックを出さない
-推測しない／安全優先／断定はやわらかい命令形（〜しよう／〜を取る）で
-文末の「。」は基本外す（不自然な場合のみ許可）
+推測しすぎない 安全優先 断定はやわらかい命令形（〜しよう/〜を取る）
+文末の「。」は基本外す
 `.trim()
 
-// --- DBから“12カテゴリ方針”を取得（なければ既定値） ---
+// --- 12カテゴリ（DBから取得。なければ既定値） ---
 async function getCharacterPromptFromDB(userId) {
   const { data } = await supabase
     .from('user_settings')
@@ -41,7 +45,6 @@ async function getCharacterPromptFromDB(userId) {
 
   if (data?.character_prompt?.trim()) return data.character_prompt.trim()
 
-  // 既定：12カテゴリ（必要ならそのままDBに保存して差し替えOK）
   return `
 あなたは、以下12カテゴリの知識を統合した「信頼できる相談員」です
 🔮 占い視点（直感・相性・運命）
@@ -59,49 +62,73 @@ async function getCharacterPromptFromDB(userId) {
 `.trim()
 }
 
-// --- 出力フィルタ：裏語・寄り添い語・見出し等を除去し、2文に制限 ---
+// --- トピック検出（占い/医療で軽いfew-shotを注入） ---
+const reFortune = /(占い|相性|タロット|星座|四柱推命|数秘|手相|運勢)/i
+const reMedical = /(起立性調節障害|OD|自律神経|頭痛|発熱|咳|腹痛|めまい|アレルギー|喘息|睡眠|不眠|PMS|月経|更年期|メンタル|鬱|不安|パニック|熱中症|脱水)/i
+
+function seedFewShotByTopic(userMessage) {
+  if (reFortune.test(userMessage)) {
+    return [
+      { role: 'user', content: '相性占いして' },
+      { role: 'assistant', content: '今は温度差を見極めよう 次は昼の短時間デートでテンポを確認する' },
+    ]
+  }
+  if (reMedical.test(userMessage)) {
+    return [
+      { role: 'user', content: '起立性調節障害で困ってる' },
+      { role: 'assistant', content: '朝の無理は切る 時差登校の許可と水分・塩分補給を今日から徹底する' },
+    ]
+  }
+  return []
+}
+
+// --- 出力フィルタ（裏語・寄り添い語を除去し2文に制限） ---
 function postProcess(text) {
   let out = String(text || '')
 
-  // コード/引用/装飾除去
+  // 装飾・コード・引用の除去
   out = out.replace(/```[\s\S]*?```/g, ' ')
   out = out.replace(/^>.*$/gm, ' ')
   out = out.replace(/^[#*\-・●>◼◆\s]+/gm, '')
   out = out.replace(/\n{2,}/g, '\n')
 
-  // メタ語・ラベル除去
+  // メタ語・ラベルの除去
   out = out.replace(/(結論|根拠|理由|行動指針|ポイント|ガイドライン|ステップ|方針)\s*[:：]?\s*/g, '')
 
-  // 内部ワード除去
-  out = out.replace(/(ズバッと|ズバット|内部指示|プロンプト|3ステップ|テンプレ)/g, '')
+  // 内部ワードの除去
+  out = out.replace(/(ズバッと|ズバット|内部指示|プロンプト|3ステップ|テンプレ|ルール)/g, '')
 
-  // 弱い共感/回避語除去
+  // 弱い共感/回避語の除去（医師・相談の文言は残す）
   out = out.replace(/(大丈夫|怖かったね|つらいよね|不安だよね|寄り添(う|って)|様子を見(よう|ましょう)?|考えてみてね|無理しないでね)/g, '')
 
-  // 余白整形
+  // 行結合して余白調整
   out = out.split('\n').map(s => s.trim()).filter(Boolean).join(' ')
   out = out.replace(/\s{2,}/g, ' ').trim()
 
-  // 2文に制限（。.!?！？ で区切る）
+  // 2文に制限
   const sentences = out.split(/(?<=[。.!?！？])/).map(s => s.trim()).filter(Boolean)
   out = [sentences[0] || '', sentences[1] || ''].filter(Boolean).join(' ')
-  out = out.replace(/。(?=\s|$)/g, '') // 文末の「。」は基本外す
+  out = out.replace(/。(?=\s|$)/g, '')
 
   if (!out) out = '方針を決めて動こう 次の一手を取る'
   return out
 }
 
-// --- OpenAI呼び出し（4o→4o-mini フォールバック付き） ---
+// --- OpenAI呼び出し（4o → 4o-mini フォールバック） ---
 async function callChat(userMessage, systemPrompt) {
+  const shots = seedFewShotByTopic(userMessage)
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...shots,
+    { role: 'user', content: userMessage },
+  ]
+
   const tryOnce = async (model) => {
     const chat = await openai.chat.completions.create({
       model,
       temperature: 0.6,
       max_tokens: 280,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
+      messages,
     })
     return (chat.choices?.[0]?.message?.content || '').trim()
   }
@@ -129,7 +156,6 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
       const userId = event.source?.userId || 'anonymous'
       const userMessage = event.message.text || ''
 
-      // システムプロンプト合成（ルール → 12カテゴリ）
       const charPrompt = await getCharacterPromptFromDB(userId)
       const systemPrompt = `${CORE_SYSTEM_PROMPT}\n\n${charPrompt}`
 
@@ -142,7 +168,6 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
         })
       } catch (err) {
         console.error('LINE reply error:', err?.message || err)
-        // 失敗しても200は返す（リトライ防止）
       }
     }
   }
