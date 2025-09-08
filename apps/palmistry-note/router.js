@@ -1,9 +1,10 @@
-
-// /apps/palmistry-note/router.js
 import { safeReply, line } from '../../services/lineClient.js'
 import { supabase } from '../../services/supabaseClient.js'
 
-const INTRO = `✋ 手相診断（note版）のご案内
+const BUCKET = process.env.SUPABASE_BUCKET || 'line-uploads'
+const TABLE = 'palm_sessions'
+
+const GUIDE_TEXT = `✋ 手相診断（note版）のご案内
 
 🔹 左手 … 生まれ持った性質や過去の傾向
 🔹 右手 … 努力や経験で変わった現在と未来の流れ
@@ -13,7 +14,7 @@ const INTRO = `✋ 手相診断（note版）のご案内
 📌 納品：note 有料記事URL
 📌 納期：受付順で48時間以内
 
-どちらの手を診断しますか？👇`
+診断を受ける場合は「承諾」と入力してください🌿`
 
 const HOW_TO_SHOOT = (label) => 
 `了解しました😊
@@ -27,70 +28,137 @@ const HOW_TO_SHOOT = (label) =>
 
 画像を受け付けたら、48時間以内にnoteのURLでお届けします🌿`
 
-export async function handleEvent(event, session = {}) {
+/* =========================
+   セッション I/O
+   ========================= */
+async function getSession(userId) {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+
+  if (!data) {
+    const init = {
+      user_id: userId,
+      state: 'START',
+      hand: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+    await supabase.from(TABLE).insert(init)
+    return init
+  }
+  return data
+}
+
+async function saveSession(session) {
+  const payload = { ...session, updated_at: new Date().toISOString() }
+  const { error } = await supabase.from(TABLE).upsert(payload)
+  if (error) throw error
+}
+
+/* =========================
+   本体ハンドラ
+   ========================= */
+export default async function handlePalm(event) {
   if (event.type !== 'message') return
   const m = event.message
+  const userId = event.source.userId
+  const replyToken = event.replyToken
 
-  // テキスト
-  if (m.type === 'text') {
-    const t = m.text.trim()
+  let s = await getSession(userId)
 
-    // 入口
-    if (t === '手相診断' || t === 'メニュー' || t === '手相') {
-      return safeReply(event.replyToken, {
-        type: 'text',
-        text: INTRO,
-        quickReply: {
-          items: [
-            { type: 'action', action: { type: 'message', label: '左手（先天・過去）', text: '左手診断' } },
-            { type: 'action', action: { type: 'message', label: '右手（後天・未来）', text: '右手診断' } }
-          ]
-        }
-      })
-    }
-
-    // 手の選択
-    if (t === '左手診断' || t === '右手診断') {
-      const hand = t.includes('左') ? 'left' : 'right'
-      // ここでは必要に応じてセッション保存してOK（例：handだけ保持）
-      session.hand = hand
-      // 保存: supabase.from('sessions').upsert(session) など、必要なら
-
-      const label = hand === 'left' ? '左手' : '右手'
-      return safeReply(event.replyToken, HOW_TO_SHOOT(label))
-    }
-
-    // ガイド固定返し
-    return safeReply(event.replyToken,
-      '手相診断の受付中だよ📷 左手か右手を選んで、ガイドに沿って写真を送ってね')
-  }
-
-  // 画像受信
+  // 画像受信は state をまたいで処理
   if (m.type === 'image') {
+    if (s.state !== 'AWAIT_IMAGE') {
+      return safeReply(replyToken, 'まず「承諾」→ 手の選択をしてから画像を送ってね📷')
+    }
     try {
-      // 画像バイナリ取得
-      const stream = await line.getMessageContent(m.id) // lineClientにメソッド実装済みならそれを利用
+      const stream = await line.getMessageContent(m.id)
       const chunks = []
       for await (const c of stream) chunks.push(c)
       const buffer = Buffer.concat(chunks)
 
-      const userId = event.source.userId
-      const hand = session?.hand || 'unknown'
-      const filename = `palmistry/${userId}/${Date.now()}_${hand}.jpg`
-
-      // Supabase Storage に保存（バケット名は環境に合わせて）
+      const filename = `palmistry/${userId}/${Date.now()}_${s.hand || 'unknown'}.jpg`
       const { error } = await supabase.storage
-        .from('line-uploads')
+        .from(BUCKET)
         .upload(filename, buffer, { contentType: 'image/jpeg', upsert: true })
       if (error) throw error
 
-      // 受付完了
-      await safeReply(event.replyToken,
-        '📩 画像を受け付けました！\n診断は受付順で48時間以内にnoteのURLをLINEでお送りします✨')
+      s.state = 'DONE'
+      await saveSession(s)
 
+      return safeReply(replyToken,
+        '📩 画像を受け付けました！\n診断は受付順で48時間以内にnoteのURLをLINEでお送りします✨')
     } catch (e) {
       console.error('palmistry image error:', e)
-      await safeReply(event.replyToken, '画像の受付でエラーが出ちゃった…もう一度送ってみてね🙏')
+      return safeReply(replyToken, '画像の受付でエラーが出ちゃった…もう一度送ってみてね🙏')
+    }
+  }
+
+  // テキスト処理
+  if (m.type === 'text') {
+    const t = m.text.trim()
+
+    switch (s.state) {
+      case 'START': {
+        s.state = 'AWAIT_ACCEPT'
+        await saveSession(s)
+        return safeReply(replyToken, GUIDE_TEXT)
+      }
+
+      case 'AWAIT_ACCEPT': {
+        if (t === '承諾') {
+          s.state = 'CHOOSE_HAND'
+          await saveSession(s)
+          return safeReply(replyToken, {
+            type: 'text',
+            text: 'どちらの手を診断しますか？👇',
+            quickReply: {
+              items: [
+                { type: 'action', action: { type: 'message', label: '左手（先天・過去）', text: '左手診断' } },
+                { type: 'action', action: { type: 'message', label: '右手（後天・未来）', text: '右手診断' } }
+              ]
+            }
+          })
+        }
+        return safeReply(replyToken, '診断を受ける場合は「承諾」と入力してね🌿')
+      }
+
+      case 'CHOOSE_HAND': {
+        if (t === '左手診断' || t === '右手診断') {
+          const hand = t.includes('左') ? 'left' : 'right'
+          s.hand = hand
+          s.state = 'AWAIT_IMAGE'
+          await saveSession(s)
+          const label = hand === 'left' ? '左手' : '右手'
+          return safeReply(replyToken, HOW_TO_SHOOT(label))
+        }
+        return safeReply(replyToken, '左手か右手を選んでください🌸')
+      }
+
+      case 'AWAIT_IMAGE': {
+        return safeReply(replyToken, '撮影ガイドに沿って画像を送ってね📷')
+      }
+
+      case 'DONE': {
+        if (t === '再診' || t === 'もう一度') {
+          s.state = 'START'
+          s.hand = null
+          await saveSession(s)
+          return safeReply(replyToken, GUIDE_TEXT)
+        }
+        return safeReply(replyToken, '診断は受付済みです。再度受ける場合は「再診」と入力してね🌸')
+      }
+
+      default: {
+        s.state = 'START'
+        s.hand = null
+        await saveSession(s)
+        return safeReply(replyToken, GUIDE_TEXT)
+      }
     }
   }
 }
