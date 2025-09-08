@@ -1,15 +1,18 @@
-// /apps/ai-line/router.js
+// apps/ai-line/router.js
 import { aiChat } from '../../services/callGPT.js'
 import { supabase } from '../../services/supabaseClient.js'
 import { getCharacterPrompt } from '../../services/userSettings.js'
 import { safeReply } from '../../services/lineClient.js'
 
-// ====== ここから下は元コードのロジックをそのまま移植 ======
-
-const ADMIN_SECRET = 'azu1228'
+/* =========================
+   定数
+   ========================= */
+const ADMIN_SECRET = 'azu1228' // 管理者用合言葉（必要に応じて.env化を推奨）
 const RESERVE_URL = process.env.RESERVE_URL || ''
+const SESSION_TABLE = 'user_sessions'
+const MAX_HISTORY_PAIRS = 12 // 保存する user/assistant の最大往復数（肥大化防止）
 
-// ---- note 一覧 ----（元の配列そのまま）
+// note の日替わり一覧（元リストをそのまま）
 const noteList = [
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
   { password: 'momo34', url: 'https://note.com/noble_loris1361/n/nfbd564d7f9fb' },
@@ -44,11 +47,13 @@ const noteList = [
   { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' },
 ]
 
-// ---- ユーティリティ ----
+/* =========================
+   ユーティリティ
+   ========================= */
 function getJapanDateString() {
   const now = new Date()
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000)
-  return jst.toISOString().slice(0, 10)
+  return jst.toISOString().slice(0, 10) // YYYY-MM-DD
 }
 function getTodayNoteStable() {
   const today = getJapanDateString()
@@ -59,12 +64,11 @@ function getTodayNoteStable() {
   const index = Math.abs(hash) % noteList.length
   return noteList[index]
 }
-function isRecent(timestamp) {
-  const now = Date.now()
-  const diff = now - new Date(timestamp).getTime()
+function isRecent(ts) {
+  if (!ts) return false
+  const diff = Date.now() - new Date(ts).getTime()
   return diff < 3 * 24 * 60 * 60 * 1000
 }
-// 📞 電話相談の問い合わせ検知
 function isPhoneInquiry(text = '') {
   const s = (text || '').toLowerCase().replace(/\s+/g, '')
   if (/電話番号|tel[:：]?/.test(s)) return false
@@ -75,140 +79,184 @@ function isPhoneInquiry(text = '') {
     /(電話相談|電話予約|通話相談)/.test(s)
   )
 }
+function capHistory(messages) {
+  // 先頭は system, 以降の user/assistant を MAX_HISTORY_PAIRS に丸める
+  if (!Array.isArray(messages)) return []
+  const sys = messages[0]?.role === 'system' ? [messages[0]] : []
+  const rest = messages.slice(sys.length)
+  const pairs = []
+  for (let i = 0; i < rest.length; i += 2) {
+    pairs.push(rest.slice(i, i + 2))
+  }
+  const trimmed = pairs.slice(-MAX_HISTORY_PAIRS).flat()
+  return [...sys, ...trimmed]
+}
 
-// ====== メイン：index.js から呼ばれる入口 ======
-export async function handleEvent(event) {
-  const today = getJapanDateString()
-  const todayNote = getTodayNoteStable()
+/* =========================
+   セッション I/O
+   ========================= */
+async function loadSession(userId) {
+  const { data, error } = await supabase
+    .from(SESSION_TABLE)
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data || null
+}
+async function saveSession(s) {
+  const payload = { ...s, updated_at: new Date().toISOString() }
+  const { error } = await supabase.from(SESSION_TABLE).upsert(payload)
+  if (error) throw error
+}
 
+/* =========================
+   本体
+   ========================= */
+export default async function handleAI(event) {
+  // テキスト以外はスルー（必要なら画像等の分岐を追加）
   if (!(event.type === 'message' && event.message?.type === 'text')) return
 
   const userId = event.source.userId
-  const userMessage = event.message.text.trim()
+  const userText = (event.message.text || '').trim()
+  const today = getJapanDateString()
+  const todayNote = getTodayNoteStable()
 
-  // キャラプロンプト
-  const characterPersona = await getCharacterPrompt(userId)
-  const needsShortAnswer = /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/.test(userMessage)
-  const systemPrompt = needsShortAnswer
-    ? `${characterPersona}\n【ルール】以下を必ず守って答えて\n・結論を最初に出す（YES / NO / やめた方がいい など）\n・最大3行まで\n・回りくどい共感・曖昧表現は禁止\n・一度で終わる返答を意識`
-    : characterPersona
-
-  // 管理者パス
-  if (userMessage === ADMIN_SECRET) {
-    await safeReply(event.replyToken, `✨ 管理者モード
-本日(${today})のnoteパスワードは「${todayNote.password}」
-URL：${todayNote.url}`)
-    return
+  // 管理者モード
+  if (userText === ADMIN_SECRET) {
+    return safeReply(
+      event.replyToken,
+      `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」\nURL：${todayNote.url}`
+    )
   }
 
-  // 📞 電話相談案内
-  if (isPhoneInquiry(userMessage)) {
-    const baseText =
+  // 電話相談の問い合わせ
+  if (isPhoneInquiry(userText)) {
+    const base =
       '電話でもお話しできるよ📞\n' +
       'リッチメニューの「予約」からかんたんに予約してね\n' +
       'お電話はAIじゃなくて人の相談員がやさしく寄りそうよ🌸'
     if (RESERVE_URL) {
-      await safeReply(event.replyToken, {
+      return safeReply(event.replyToken, {
         type: 'text',
-        text: baseText,
-        quickReply: { items: [{ type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } }] },
+        text: base,
+        quickReply: { items: [{ type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } }] }
       })
-    } else {
-      await safeReply(event.replyToken, baseText)
     }
-    return
+    return safeReply(event.replyToken, base)
   }
 
-  // セッション読み込み
-  let { data: session } = await supabase
-    .from('user_sessions')
-    .select('*')
-    .eq('user_id', userId)
-    .maybeSingle()
-
-  let count = 0,
-    messages = [],
-    greeted = false
-  let lastDate = today,
-    authenticated = false,
-    authDate = null
+  // 既存セッション読み込み
+  let session = await loadSession(userId)
+  let count = 0
+  let messages = []
+  let greeted = false
+  let lastDate = today
+  let authenticated = false
+  let authDate = null
 
   if (session) {
-    const isSameDay = session.last_date === today
-    const isRecentUpdate = isRecent(session.updated_at)
-    count = isSameDay ? session.count || 0 : 0
-    messages = isRecentUpdate ? session.messages || [] : []
-    greeted = session.greeted || false
+    const sameDay = session.last_date === today
+    const recent = isRecent(session.updated_at)
+    count = sameDay ? (session.count || 0) : 0
+    messages = recent ? (session.messages || []) : []
+    greeted = !!session.greeted
     lastDate = session.last_date || today
-    authenticated = isSameDay ? session.authenticated || false : false
-    authDate = isSameDay ? session.auth_date || null : null
+    authenticated = sameDay ? !!session.authenticated : false
+    authDate = sameDay ? (session.auth_date || null) : null
+  } else {
+    session = { user_id: userId }
   }
 
-  // 合言葉
-  if (userMessage === todayNote.password) {
-    await supabase.from('user_sessions').upsert({
+  // 合言葉（noteのパス）で当日解放
+  if (userText === todayNote.password) {
+    const newSession = {
+      ...session,
       user_id: userId,
       count,
       messages,
       last_date: today,
       greeted,
       authenticated: true,
-      auth_date: today,
-      updated_at: new Date().toISOString(),
-    })
-    await safeReply(event.replyToken, '合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕')
-    return
+      auth_date: today
+    }
+    await saveSession(newSession)
+    return safeReply(event.replyToken, '合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕')
   }
 
-  let replyText = ''
-  const newCount = (count || 0) + 1
+  // キャラプロンプト + 短文回答モード
+  const persona = await getCharacterPrompt(userId)
+  const needsShort =
+    /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/i.test(userText)
+  const systemPrompt = needsShort
+    ? `${persona}\n【ルール】以下を必ず守って答えて\n・結論を最初に出す（YES / NO / やめた方がいい など）\n・最大3行まで\n・回りくどい共感・曖昧表現は禁止\n・一度で終わる返答を意識`
+    : persona
 
-  // 初回 system 投入
+  // 初回 system を挿入
   if (messages.length === 0 && !greeted) {
     messages.push({ role: 'system', content: systemPrompt })
     greeted = true
   }
 
-  if (!authenticated) {
-    if (count <= 3) {
-      messages.push({ role: 'user', content: userMessage })
+  let replyText = ''
+  const newCount = (count || 0) + 1
+
+  try {
+    if (!authenticated) {
+      if (newCount <= 3) {
+        messages.push({ role: 'user', content: userText })
+        messages = capHistory(messages)
+        const result = await aiChat(messages)
+        replyText = result.text
+        if (result.ok) messages.push({ role: 'assistant', content: result.text })
+      } else if (newCount === 4) {
+        messages.push({
+          role: 'user',
+          content: `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください\n\n${userText}`,
+        })
+        messages = capHistory(messages)
+        const result = await aiChat(messages)
+        if (result.ok) {
+          messages.push({ role: 'assistant', content: result.text })
+          replyText =
+            `${result.text}\n\n明日になれば、またお話しできるよ🥰\n` +
+            `🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url} 🔑`
+        } else {
+          replyText = result.text
+        }
+      } else {
+        replyText =
+          `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\n` +
+          `🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url}`
+      }
+    } else {
+      messages.push({ role: 'user', content: userText })
+      messages = capHistory(messages)
       const result = await aiChat(messages)
       replyText = result.text
       if (result.ok) messages.push({ role: 'assistant', content: result.text })
-    } else if (count === 4) {
-      messages.push({
-        role: 'user',
-        content: `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください\n\n${userMessage}`,
-      })
-      const result = await aiChat(messages)
-      if (result.ok) {
-        messages.push({ role: 'assistant', content: result.text })
-        replyText = `${result.text}\n\n明日になれば、またお話しできるよ🥰\n🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url} 🔑`
-      } else {
-        replyText = result.text
-      }
-    } else {
-      replyText = `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\n🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url}`
     }
-  } else {
-    messages.push({ role: 'user', content: userMessage })
-    const result = await aiChat(messages)
-    replyText = result.text
-    if (result.ok) messages.push({ role: 'assistant', content: result.text })
+  } catch (e) {
+    console.error('[AI-CHAT ERROR]', e)
+    replyText = 'いま少し混み合ってるみたい…もう一度だけ送ってみてね🙏'
   }
 
   // セッション保存
-  await supabase.from('user_sessions').upsert({
+  const toSave = {
     user_id: userId,
     count: newCount,
     messages,
     last_date: today,
     greeted,
     authenticated,
-    auth_date: authDate,
-    updated_at: new Date().toISOString(),
-  })
+    auth_date: authDate
+  }
+  try {
+    await saveSession(toSave)
+  } catch (e) {
+    console.error('[SESSION SAVE ERROR]', e)
+  }
 
+  // 返信
   await safeReply(event.replyToken, replyText)
 }
-
