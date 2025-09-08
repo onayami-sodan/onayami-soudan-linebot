@@ -1,81 +1,62 @@
-// services/server.js
-import 'dotenv/config'
-import express from 'express'
-import { middleware as lineMiddleware } from '@line/bot-sdk'
-import { safeReply } from './lineClient.js'
+import { isOpen, setOpen } from './featureFlags.js'
+const ADMIN_IDS = (process.env.ADMIN_USER_IDS || '').split(',').filter(Boolean) // "Uxxxx,Uyyyy" 形式
+const MAINTENANCE = {
+  palm : '✋ 手相診断は現在「準備中」です。公開まで少しお待ちください🙏',
+  ai   : '🤖 AI相談は現在「準備中」です。少し時間をおいてお試しください🙏',
+  renai: '💘 恋愛診断は現在「準備中」です。公開まで少しお待ちください🙏',
+}
 
-// 3本のルーター
-import handleRenai from '../apps/renai-diagnosis/router.js'
-import handlePalm  from '../apps/palmistry-note/router.js'
-import handleAI    from '../apps/ai-line/router.js'
+// …中略（middlewareなどはそのまま）
 
-/* ===== 基本設定 ===== */
-const PORT = process.env.PORT || 3000
-const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
-const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET
-
-const app = express()
-app.use(express.json())
-
-/* ===== ヘルスチェック ===== */
-app.get('/', (_req, res) => res.status(200).send('multi-app bot running'))
-app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }))
-
-/* ===== Webhook ===== */
-app.post(
-  '/webhook',
-  lineMiddleware({
-    channelAccessToken: LINE_CHANNEL_ACCESS_TOKEN,
-    channelSecret: LINE_CHANNEL_SECRET
-  }),
-  async (req, res) => {
-    const events = Array.isArray(req.body?.events) ? req.body.events : []
-    await Promise.all(events.map(handleEventSafely))
-    res.status(200).end()
-  }
-)
-
-/* ===== イベント振り分け（postback最優先）===== */
 async function handleEventSafely(event) {
   try {
-    // 1) リッチメニュー（ポストバック）最優先でルーティング
+    // 0) 管理者コマンド（どの画面でも有効）
+    if (event.type === 'message' && event.message?.type === 'text') {
+      const text = (event.message.text || '').trim()
+      const uid = event.source?.userId
+      const isAdmin = ADMIN_IDS.includes(uid)
+      // 例: 「/open palm」「/close renai」「/status」
+      if (isAdmin && text.startsWith('/')) {
+        const [cmd, appRaw] = text.slice(1).split(/\s+/,2)
+        const app = appRaw?.toLowerCase()
+        if (cmd === 'open'  && ['palm','ai','renai'].includes(app)) { await setOpen(app, true);  return safeReply(event.replyToken, `✅ ${app} を OPEN にしました`) }
+        if (cmd === 'close' && ['palm','ai','renai'].includes(app)) { await setOpen(app, false); return safeReply(event.replyToken, `⛔ ${app} を 準備中 にしました`) }
+        if (cmd === 'status') {
+          const [p,a,r] = await Promise.all([isOpen('palm'), isOpen('ai'), isOpen('renai')])
+          return safeReply(event.replyToken, `状態\n- 手相: ${p?'OPEN':'準備中'}\n- AI相談: ${a?'OPEN':'準備中'}\n- 恋愛診断: ${r?'OPEN':'準備中'}`)
+        }
+        // 想定外コマンド
+        if (isAdmin) return safeReply(event.replyToken, 'コマンド: /open|/close <palm|ai|renai> /status')
+      }
+    }
+
+    // 1) ポストバック分岐（最優先）
     if (event.type === 'postback') {
       const data = event.postback?.data || ''
-      if (data === 'APP=palm')  return handlePalm(event)      // 手相
-      if (data === 'APP=ai')    return handleAI(event)        // AI相談
-      if (data === 'APP=renai') return handleRenai(event)     // 恋愛診断
+      if (data === 'APP=palm')  return (await isOpen('palm'))  ? handlePalm(event)  : safeReply(event.replyToken, MAINTENANCE.palm)
+      if (data === 'APP=ai')    return (await isOpen('ai'))    ? handleAI(event)    : safeReply(event.replyToken, MAINTENANCE.ai)
+      if (data === 'APP=renai') return (await isOpen('renai')) ? handleRenai(event) : safeReply(event.replyToken, MAINTENANCE.renai)
       return
     }
 
-    // 2) フォロー時は軽い案内（必要ならリッチメニューの使い方を表示）
+    // 2) フォロー時
     if (event.type === 'follow') {
       return safeReply(event.replyToken, 'メニューから「手相／AI相談／恋愛診断」を選んでね🌸')
     }
 
-    // 3) テキストメッセージなら、保険としてキーワードでも切替可能（任意）
+    // 3)（保険）テキストによる手動切替もフラグを尊重
     if (event.type === 'message' && event.message?.type === 'text') {
       const text = (event.message.text || '').trim()
-      if (text === '手相')       return handlePalm(event)
-      if (text === 'AI相談')     return handleAI(event)
-      if (text === '恋愛診断')   return handleRenai(event)
-      // 既定は恋愛診断へ回す（自然入力でも一旦ここへ）
-      return handleRenai(event)
+      if (text === '手相')       return (await isOpen('palm'))  ? handlePalm(event)  : safeReply(event.replyToken, MAINTENANCE.palm)
+      if (text === 'AI相談')     return (await isOpen('ai'))    ? handleAI(event)    : safeReply(event.replyToken, MAINTENANCE.ai)
+      if (text === '恋愛診断')   return (await isOpen('renai')) ? handleRenai(event) : safeReply(event.replyToken, MAINTENANCE.renai)
+      // 既定は恋愛診断（必要なら変更可）
+      return (await isOpen('renai')) ? handleRenai(event) : safeReply(event.replyToken, MAINTENANCE.renai)
     }
 
-    // 4) 画像などは各ルーター側が必要なら個別に対応（例：手相の画像受付）
-    // 既定で恋愛診断に渡すと誤作動するので、ここは何もしない
     return
   } catch (err) {
     console.error('[ERROR] event handling failed:', err)
-    if (event?.replyToken) {
-      try {
-        await safeReply(event.replyToken, 'エラーが発生しました。少し待ってからもう一度お試しください🙏')
-      } catch {}
-    }
+    if (event?.replyToken) { try { await safeReply(event.replyToken, 'エラーが発生しました。少し待ってからもう一度お試しください🙏') } catch {} }
   }
 }
-
-/* ===== 起動 ===== */
-app.listen(PORT, () => {
-  console.log(`listening on ${PORT}`)
-})
