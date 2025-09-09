@@ -326,7 +326,7 @@ async function handlePalmistryFlow(event, session) {
       ])
       return true
     }
-    await setUserFlow(session.user_id, 'palm', { palm_step: 'AGE_GROUP', palm_gender: gender })
+    await setUserFlow(session.user_id, 'palm', { palm_step: 'AGE', palm_gender: gender })
     await replyWithChoices(
       event.replyToken,
       '年代を選んでね',
@@ -335,8 +335,8 @@ async function handlePalmistryFlow(event, session) {
     return true
   }
 
-  // AGE_GROUP
-  if (session.palm_step === 'AGE_GROUP') {
+  // AGE
+  if (session.palm_step === 'AGE') {
     if (!PALM_AGE_TO_NUMBER.has(t)) {
       await replyWithChoices(
         event.replyToken,
