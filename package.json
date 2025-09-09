@@ -2,11 +2,12 @@
   "name": "love-diagnosis-bot",
   "version": "1.0.1",
   "type": "module",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
-    "dev": "node server.js",
-    "start": "NODE_ENV=production node server.js"
+    "dev": "node index.js",
+    "start": "NODE_ENV=production node index.js"
   },
+  "engines": { "node": ">=20" },
   "dependencies": {
     "@line/bot-sdk": "^9.0.4",
     "@supabase/supabase-js": "^2.45.4",
