@@ -14,7 +14,7 @@ const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
 const MAX_HISTORY_PAIRS = 12 // 保存する user/assistant の最大往復数（肥大化防止）
 
-// リッチメニュー（テキスト送信）完全一致マップ
+// リッチメニュー（テキスト送信）完全一致マップ（ベース）
 const MENU_MAP = new Map([
   ['AI相談員ちゃん', 'ai'],
   ['手相占い診断', 'palm'],
@@ -137,13 +137,22 @@ async function setUserFlow(userId, flow, extra = {}) {
    ========================= */
 async function handleRichMenuText(event, userId) {
   if (event.type !== 'message' || event.message?.type !== 'text') return false
+
+  // 厳密一致 + 同義語（スペース除去版も見る）
   const text = (event.message.text || '').trim().normalize('NFKC')
-  const app = MENU_MAP.get(text)
+  const normalized = text.replace(/\s+/g, '')
+  const aliasMap = new Map([
+    ...MENU_MAP,                 // 既存の完全一致
+    ['AI相談', 'ai'],
+    ['相談', 'ai'],
+    ['占い', 'ai'],
+    ['手相', 'palm'],
+    ['恋愛診断', 'love40'],
+  ])
+  const app = aliasMap.get(text) || aliasMap.get(normalized)
   if (!app) return false
 
-  const flow = await getUserFlow(userId)
-  if (flow !== 'idle') return false // 進行中は切替えない
-
+  // ★ flowの状態に関係なく即切替（ユーザー操作を最優先）
   if (app === 'ai') {
     await setUserFlow(userId, 'ai')
     await safeReply(event.replyToken, 'AI相談員ちゃんを開きますね🌸')
@@ -467,7 +476,7 @@ export async function handleAI(event) {
   const userId = event.source?.userId
   if (!userId) return
 
-  // 1) リッチメニュー（完全一致）を最優先で判定
+  // 1) リッチメニュー（同義語含む）を最優先で判定
   const handledMenu = await handleRichMenuText(event, userId)
   if (handledMenu) return
 
