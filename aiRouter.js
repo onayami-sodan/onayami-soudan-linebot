@@ -1,10 +1,12 @@
-// aiRouter.js  （直下フラット構成用・完全版）
+// aiRouter.js  （直下フラット構成用・完全版：選択式対応）
 // ESM 前提
 
 import { aiChat } from './callGPT.js'
 import { supabase } from './supabaseClient.js'
 import { getCharacterPrompt } from './userSettings.js'
 import { safeReply } from './lineClient.js'
+// questions.js 側は「export const LOVE_QUESTIONS = [...]」を想定（default の場合は書き方を変えてね）
+import { LOVE_QUESTIONS } from './questions.js'
 
 /* =========================
    定数
@@ -94,11 +96,23 @@ function capHistory(messages) {
   const sys = messages[0]?.role === 'system' ? [messages[0]] : []
   const rest = messages.slice(sys.length)
   const pairs = []
-  for (let i = 0; i < rest.length; i += 2) {
-    pairs.push(rest.slice(i, i + 2))
-  }
+  for (let i = 0; i < rest.length; i += 2) pairs.push(rest.slice(i, i + 2))
   const trimmed = pairs.slice(-MAX_HISTORY_PAIRS).flat()
   return [...sys, ...trimmed]
+}
+
+// Quick Reply でボタン選択させる共通関数
+async function replyWithChoices(replyToken, text, choices = []) {
+  return safeReply(replyToken, {
+    type: 'text',
+    text,
+    quickReply: {
+      items: choices.map((c) => ({
+        type: 'action',
+        action: { type: 'message', label: c.label, text: c.text },
+      })),
+    },
+  })
 }
 
 /* =========================
@@ -142,7 +156,7 @@ async function handleRichMenuText(event, userId) {
   const text = (event.message.text || '').trim().normalize('NFKC')
   const normalized = text.replace(/\s+/g, '')
   const aliasMap = new Map([
-    ...MENU_MAP,                 // 既存の完全一致
+    ...MENU_MAP, // 既存の完全一致
     ['AI相談', 'ai'],
     ['相談', 'ai'],
     ['占い', 'ai'],
@@ -152,7 +166,7 @@ async function handleRichMenuText(event, userId) {
   const app = aliasMap.get(text) || aliasMap.get(normalized)
   if (!app) return false
 
-  // ★ flowの状態に関係なく即切替（ユーザー操作を最優先）
+  // ★ flow状態に関係なく即切替（ユーザー操作を最優先）
   if (app === 'ai') {
     await setUserFlow(userId, 'ai')
     await safeReply(event.replyToken, 'AI相談員ちゃんを開きますね🌸')
@@ -175,11 +189,14 @@ async function handleRichMenuText(event, userId) {
    手相フロー（最小実装：PRICE→GENDER→AGE→HAND→GUIDE→WAIT_IMAGE）
    ========================= */
 async function sendPalmistryIntro(event) {
-  const text =
-    '✋ 手相診断のご案内\n' +
-    '片手3,000円（今だけ特別）\n' +
-    'よろしければ「承諾」と送ってね（キャンセル可）'
-  await safeReply(event.replyToken, text)
+  await replyWithChoices(
+    event.replyToken,
+    '✋ 手相診断のご案内\n片手3,000円（今だけ特別）',
+    [
+      { label: '承諾', text: '承諾' },
+      { label: 'キャンセル', text: 'キャンセル' },
+    ]
+  )
 }
 async function handlePalmistryFlow(event, session) {
   const msgType = event.message?.type
@@ -205,7 +222,11 @@ async function handlePalmistryFlow(event, session) {
   if (session.palm_step === 'PRICE') {
     if (t === '承諾') {
       await setUserFlow(session.user_id, 'palm', { palm_step: 'GENDER' })
-      await safeReply(event.replyToken, '性別を教えてね（男性／女性／その他）')
+      await replyWithChoices(event.replyToken, '性別を教えてね', [
+        { label: '男性', text: '男性' },
+        { label: '女性', text: '女性' },
+        { label: 'その他', text: 'その他' },
+      ])
       return true
     }
     if (t === 'キャンセル') {
@@ -213,7 +234,10 @@ async function handlePalmistryFlow(event, session) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return true
     }
-    await safeReply(event.replyToken, '進める場合は「承諾」と送ってね🌸')
+    await replyWithChoices(event.replyToken, '進める場合は「承諾」を押してね🌸', [
+      { label: '承諾', text: '承諾' },
+      { label: 'キャンセル', text: 'キャンセル' },
+    ])
     return true
   }
 
@@ -230,22 +254,30 @@ async function handlePalmistryFlow(event, session) {
       return true
     }
     await setUserFlow(session.user_id, 'palm', { palm_step: 'HAND', palm_age: age })
-    await safeReply(
+    await replyWithChoices(
       event.replyToken,
-      '左手／右手どちらを診断する？\n- 左手：先天傾向（生まれ持った性質）\n- 右手：未来（今の状態・努力の結果）'
+      '左手／右手どちらを診断する？\n- 左手：先天傾向（生まれ持った性質）\n- 右手：未来（今の状態・努力の結果）',
+      [
+        { label: '左手', text: '左手' },
+        { label: '右手', text: '右手' },
+      ]
     )
     return true
   }
 
   if (session.palm_step === 'HAND') {
     if (!/(左|右)/.test(t)) {
-      await safeReply(event.replyToken, '左手 か 右手 を教えてね（例：左手）')
+      await replyWithChoices(event.replyToken, '左手 か 右手 を選んでね', [
+        { label: '左手', text: '左手' },
+        { label: '右手', text: '右手' },
+      ])
       return true
     }
     await setUserFlow(session.user_id, 'palm', { palm_step: 'GUIDE', palm_hand: t })
-    await safeReply(
+    await replyWithChoices(
       event.replyToken,
-      '📸 撮影ガイド\n・手のひら全体が写るように\n・指先まで入れる\n・明るい場所でピントを合わせて\n準備OKなら「準備完了」と送ってね'
+      '📸 撮影ガイド\n・手のひら全体が写るように\n・指先まで入れる\n・明るい場所でピントを合わせて\n準備OKなら「準備完了」を押してね',
+      [{ label: '準備完了', text: '準備完了' }]
     )
     return true
   }
@@ -256,7 +288,9 @@ async function handlePalmistryFlow(event, session) {
       await safeReply(event.replyToken, 'OK！画像を送ってください✋（1枚）')
       return true
     }
-    await safeReply(event.replyToken, '準備ができたら「準備完了」と送ってね🌸')
+    await replyWithChoices(event.replyToken, '準備ができたら「準備完了」を押してね🌸', [
+      { label: '準備完了', text: '準備完了' },
+    ])
     return true
   }
 
@@ -264,61 +298,102 @@ async function handlePalmistryFlow(event, session) {
 }
 
 /* =========================
-   恋愛診断書（40問）フロー（最小実装：PRICE→START案内）
+   恋愛診断書（40問）フロー：選択式（Quick Reply）
    ========================= */
 async function sendLove40Intro(event) {
-  const text =
-    '💘 恋愛診断書（40問）\n' +
-    '承諾後に質問を進めます。\n' +
-    'よろしければ「承諾」と送ってね（キャンセル可）'
-  await safeReply(event.replyToken, text)
+  await replyWithChoices(
+    event.replyToken,
+    '💘 恋愛診断書（40問）\n承諾後に質問を進めます。',
+    [
+      { label: '承諾', text: '承諾' },
+      { label: 'キャンセル', text: 'キャンセル' },
+    ]
+  )
 }
+
+// 質問をA/Bボタン付きで出す
+async function sendNextLoveQuestion(event, session) {
+  const idx = session.love_idx ?? 0
+  if (idx >= LOVE_QUESTIONS.length) {
+    const answers = (session.love_answers || []).join('')
+    await safeReply(
+      event.replyToken,
+      `回答ありがとう💕\n（本番）ここで診断レポートを返してね\nあなたの回答コード：${answers}`
+    )
+    await setUserFlow(session.user_id, 'idle', { love_step: null, love_idx: null })
+    return true
+  }
+
+  const q = LOVE_QUESTIONS[idx] // 例: "Q1. ... A:xxx / B:yyy（A or B）"
+  await replyWithChoices(event.replyToken, q, [
+    { label: 'A', text: 'A' },
+    { label: 'B', text: 'B' },
+  ])
+  return false
+}
+
 async function handleLove40Flow(event, session) {
   if (!(event.type === 'message' && event.message?.type === 'text')) return false
   const t = (event.message.text || '').trim().normalize('NFKC')
 
+  // 料金案内→承諾/キャンセル（ボタン対応）
   if (session.love_step === 'PRICE') {
     if (t === '承諾') {
-      await setUserFlow(session.user_id, 'love40', { love_step: 'Q_START', love_answers: [] })
-      await safeReply(
+      await setUserFlow(session.user_id, 'love40', { love_step: 'Q', love_answers: [], love_idx: 0 })
+      await replyWithChoices(
         event.replyToken,
-        'ありがとう🌸\nこのあと40問を少しずつ聞くね。\nまずは「開始」と送ってスタート！'
+        'ありがとう🌸\nこのあと少しずつ質問するね。\n準備OKなら「開始」を押してね',
+        [{ label: '開始', text: '開始' }]
       )
       return true
     }
     if (t === 'キャンセル') {
-      await setUserFlow(session.user_id, 'idle', { love_step: null })
+      await setUserFlow(session.user_id, 'idle', { love_step: null, love_idx: null })
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return true
     }
-    await safeReply(event.replyToken, '進める場合は「承諾」と送ってね🌸')
+    await replyWithChoices(event.replyToken, '進める場合は「承諾」を押してね🌸', [
+      { label: '承諾', text: '承諾' },
+      { label: 'キャンセル', text: 'キャンセル' },
+    ])
     return true
   }
 
-  if (session.love_step === 'Q_START') {
-    if (t !== '開始') {
-      await safeReply(event.replyToken, 'スタート準備OKなら「開始」と送ってね✨')
-      return true
-    }
-    await safeReply(
-      event.replyToken,
-      'Q1. 山道で迷ったあなた。A:細い下り坂 / B:広い上り坂\n（A or B で回答）'
-    )
-    await setUserFlow(session.user_id, 'love40', { love_step: 'Q1' })
-    return true
-  }
+  // 出題・回答（選択式）
+  if (session.love_step === 'Q') {
+    const idx = session.love_idx ?? 0
 
-  if (session.love_step === 'Q1') {
-    if (!/^(A|B)$/i.test(t)) {
-      await safeReply(event.replyToken, 'A か B で答えてね🌸')
+    // 最初だけ「開始」ボタンを要求
+    if (idx === 0 && t !== '開始') {
+      await replyWithChoices(event.replyToken, '準備OKなら「開始」を押してね✨', [
+        { label: '開始', text: '開始' },
+      ])
       return true
     }
-    await safeReply(
-      event.replyToken,
-      'OK、回答ありがとう！続きは本番の質問配列に接続して進めてね。\n今日はここで受付を完了します✨'
-    )
-    await setUserFlow(session.user_id, 'idle', { love_step: null })
-    return true
+    if (idx === 0 && t === '開始') {
+      return await sendNextLoveQuestion(event, session)
+    }
+
+    // A/B 以外は再提示
+    if (!/^(?:A|B)$/i.test(t)) {
+      await replyWithChoices(event.replyToken, 'A か B を選んでね🌸', [
+        { label: 'A', text: 'A' },
+        { label: 'B', text: 'B' },
+      ])
+      return true
+    }
+
+    const answers = [...(session.love_answers || []), t.toUpperCase()]
+    const nextIdx = idx + 1
+
+    await setUserFlow(session.user_id, 'love40', {
+      love_step: 'Q',
+      love_answers: answers,
+      love_idx: nextIdx,
+    })
+
+    // 次の質問 or 終了
+    return await sendNextLoveQuestion(event, { ...session, love_answers: answers, love_idx: nextIdx })
   }
 
   return false
@@ -417,7 +492,8 @@ async function handleAiChat(event, session) {
       } else if (newCount === 4) {
         messages.push({
           role: 'user',
-          content: `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください\n\n${userText}`,
+          content:
+            `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください\n\n${userText}`,
         })
         messages = capHistory(messages)
         const result = await aiChat(messages)
@@ -509,7 +585,6 @@ export async function handleAI(event) {
       event.replyToken,
       'ありがとう！文字で送ってくれたら、もっと具体的にお手伝いできるよ🌸'
     )
-    return
   }
 }
 
