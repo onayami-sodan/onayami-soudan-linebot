@@ -2,7 +2,7 @@
 import express from 'express'
 import { messagingApi } from '@line/bot-sdk'
 import { safeReply } from './lineClient.js'
-import handleAI from './aiRouter.js'            // ← ここが ./aiRouter.js であること
+import { handleAI } from './aiRouter.js'            // ← ここが ./aiRouter.js であること
 import { isOpen, setOpen } from './featureFlags.js'
 
 const app = express()
