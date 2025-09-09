@@ -17,8 +17,8 @@ const MAX_HISTORY_PAIRS = 12 // 保存する user/assistant の最大往復数�
 // リッチメニュー（テキスト送信）完全一致マップ
 const MENU_MAP = new Map([
   ['AI相談員ちゃん', 'ai'],
-  ['手相占い診断',   'palm'],
-  ['恋愛診断書',     'love40'],
+  ['手相占い診断', 'palm'],
+  ['恋愛診断書', 'love40'],
 ])
 
 // note の日替わり一覧（必要なら差し替え）
@@ -346,7 +346,9 @@ async function handleAiChat(event, session) {
         type: 'text',
         text: base,
         quickReply: {
-          items: [{ type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } }],
+          items: [
+            { type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } },
+          ],
         },
       })
     } else {
@@ -371,16 +373,17 @@ async function handleAiChat(event, session) {
   // 会話履歴と回数をロード
   const sameDay = session.last_date === today
   const recent = isRecent(session.updated_at)
-  let count = sameDay ? (session.count || 0) : 0
-  let messages = recent ? (session.messages || []) : []
+  let count = sameDay ? session.count || 0 : 0
+  let messages = recent ? session.messages || [] : []
   let greeted = !!session.greeted
   let authenticated = sameDay ? !!session.authenticated : false
-  let authDate = sameDay ? (session.auth_date || null) : null
+  let authDate = sameDay ? session.auth_date || null : null
 
   // キャラプロンプト + 短文回答モード
   const persona = await getCharacterPrompt(userId)
-  const needsShort =
-    /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/i.test(userText)
+  const needsShort = /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/i.test(
+    userText
+  )
   const systemPrompt = needsShort
     ? `${persona}\n【ルール】以下を必ず守って答えて\n・結論を最初に出す（YES / NO / やめた方がいい など）\n・最大3行まで\n・回りくどい共感・曖昧表現は禁止\n・一度で終わる返答を意識`
     : persona
@@ -459,8 +462,7 @@ async function handleAiChat(event, session) {
    エクスポート（イベント1件を処理）
    ========================= */
 export async function handleAI(event) {
-  // ... （中身はそのまま）
-}
+  if (!event) return
 
   const userId = event.source?.userId
   if (!userId) return
@@ -492,11 +494,14 @@ export async function handleAI(event) {
     return
   }
 
-  // 未対応イベント（画像スタンプ等）→軽いガイド
+  // 未対応イベント（画像・スタンプ等）→軽いガイド
   if (event.type === 'message' && event.message?.type !== 'text') {
     await safeReply(
       event.replyToken,
       'ありがとう！文字で送ってくれたら、もっと具体的にお手伝いできるよ🌸'
     )
+    return
   }
 }
+
+export default handleAI
