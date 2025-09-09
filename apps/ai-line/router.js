@@ -1,4 +1,6 @@
 // apps/ai-line/router.js
+// ESM前提（import）
+// ─────────────────────────────────────────────
 import { aiChat } from '../../services/callGPT.js'
 import { supabase } from '../../services/supabaseClient.js'
 import { getCharacterPrompt } from '../../services/userSettings.js'
@@ -12,7 +14,14 @@ const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
 const MAX_HISTORY_PAIRS = 12 // 保存する user/assistant の最大往復数（肥大化防止）
 
-// note の日替わり一覧（元リストをそのまま）
+// リッチメニュー（テキスト送信）完全一致マップ
+const MENU_MAP = new Map([
+  ['AI相談員ちゃん', 'ai'],
+  ['手相占い診断',   'palm'],
+  ['恋愛診断書',     'love40'],
+])
+
+// note の日替わり一覧（元リストのまま）
 const noteList = [
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
   { password: 'momo34', url: 'https://note.com/noble_loris1361/n/nfbd564d7f9fb' },
@@ -111,23 +120,222 @@ async function saveSession(s) {
 }
 
 /* =========================
-   本体
+   フロー制御
    ========================= */
-export default async function handleAI(event) {
-  // テキスト以外はスルー（必要なら画像等の分岐を追加）
-  if (!(event.type === 'message' && event.message?.type === 'text')) return
+async function getUserFlow(userId) {
+  const row = await loadSession(userId)
+  if (!row) return 'idle'
+  return row.flow || 'idle'
+}
+async function setUserFlow(userId, flow, extra = {}) {
+  const row = (await loadSession(userId)) || { user_id: userId }
+  await saveSession({ ...row, flow, ...extra })
+}
 
-  const userId = event.source.userId
+/* =========================
+   リッチメニュー（テキスト送信）判定
+   ========================= */
+async function handleRichMenuText(event, userId) {
+  if (event.type !== 'message' || event.message?.type !== 'text') return false
+  const text = (event.message.text || '').trim().normalize('NFKC')
+  const app = MENU_MAP.get(text)
+  if (!app) return false
+
+  const flow = await getUserFlow(userId)
+  if (flow !== 'idle') return false // 進行中は切替えない
+
+  if (app === 'ai') {
+    await setUserFlow(userId, 'ai')
+    await safeReply(event.replyToken, 'AI相談員ちゃんを開きますね🌸')
+    return true
+  }
+  if (app === 'palm') {
+    await setUserFlow(userId, 'palm', { palm_step: 'PRICE' })
+    await sendPalmistryIntro(event)
+    return true
+  }
+  if (app === 'love40') {
+    await setUserFlow(userId, 'love40', { love_step: 'PRICE' })
+    await sendLove40Intro(event)
+    return true
+  }
+  return false
+}
+
+/* =========================
+   手相フロー（最小実装：PRICE→GENDER→AGE→HAND→GUIDE→WAIT_IMAGE）
+   ========================= */
+async function sendPalmistryIntro(event) {
+  const text =
+    '✋ 手相診断のご案内\n' +
+    '片手3,000円（今だけ特別）\n' +
+    'よろしければ「承諾」と送ってね（キャンセル可）'
+  await safeReply(event.replyToken, text)
+}
+async function handlePalmistryFlow(event, session) {
+  const msgType = event.message?.type
+
+  // 画像が届いた時（WAIT_IMAGE）
+  if (event.type === 'message' && msgType === 'image') {
+    if (session.palm_step === 'WAIT_IMAGE') {
+      await setUserFlow(session.user_id, 'palm', { palm_step: 'PENDING_RESULT' })
+      await safeReply(
+        event.replyToken,
+        'お写真を受け取りました📸\n順番に拝見して診断します。48時間以内にお届けしますね🌸'
+      )
+      await setUserFlow(session.user_id, 'idle', { palm_step: null }) // 受付で終了
+      return true
+    }
+    return false
+  }
+
+  // テキストでのステップ遷移
+  if (!(event.type === 'message' && msgType === 'text')) return false
+  const t = (event.message.text || '').trim().normalize('NFKC')
+
+  if (session.palm_step === 'PRICE') {
+    if (t === '承諾') {
+      await setUserFlow(session.user_id, 'palm', { palm_step: 'GENDER' })
+      await safeReply(event.replyToken, '性別を教えてね（男性／女性／その他）')
+      return true
+    }
+    if (t === 'キャンセル') {
+      await setUserFlow(session.user_id, 'idle', { palm_step: null })
+      await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
+      return true
+    }
+    await safeReply(event.replyToken, '進める場合は「承諾」と送ってね🌸')
+    return true
+  }
+
+  if (session.palm_step === 'GENDER') {
+    await setUserFlow(session.user_id, 'palm', { palm_step: 'AGE', palm_gender: t })
+    await safeReply(event.replyToken, '年齢を教えてね（数字だけでOK）')
+    return true
+  }
+
+  if (session.palm_step === 'AGE') {
+    const age = parseInt(t, 10)
+    if (!Number.isFinite(age) || age < 5 || age > 120) {
+      await safeReply(event.replyToken, 'ごめんね、年齢は数字でお願い（例：28）')
+      return true
+    }
+    await setUserFlow(session.user_id, 'palm', { palm_step: 'HAND', palm_age: age })
+    await safeReply(
+      event.replyToken,
+      '左手／右手どちらを診断する？\n- 左手：先天傾向（生まれ持った性質）\n- 右手：未来（今の状態・努力の結果）'
+    )
+    return true
+  }
+
+  if (session.palm_step === 'HAND') {
+    if (!/(左|右)/.test(t)) {
+      await safeReply(event.replyToken, '左手 か 右手 を教えてね（例：左手）')
+      return true
+    }
+    await setUserFlow(session.user_id, 'palm', { palm_step: 'GUIDE', palm_hand: t })
+    await safeReply(
+      event.replyToken,
+      '📸 撮影ガイド\n・手のひら全体が写るように\n・指先まで入れる\n・明るい場所でピントを合わせて\n準備OKなら「準備完了」と送ってね'
+    )
+    return true
+  }
+
+  if (session.palm_step === 'GUIDE') {
+    if (t === '準備完了') {
+      await setUserFlow(session.user_id, 'palm', { palm_step: 'WAIT_IMAGE' })
+      await safeReply(event.replyToken, 'OK！画像を送ってください✋（1枚）')
+      return true
+    }
+    await safeReply(event.replyToken, '準備ができたら「準備完了」と送ってね🌸')
+    return true
+  }
+
+  return false
+}
+
+/* =========================
+   恋愛診断書（40問）フロー（最小実装：PRICE→START案内）
+   ========================= */
+async function sendLove40Intro(event) {
+  const text =
+    '💘 恋愛診断書（40問）\n' +
+    '承諾後に質問を進めます。\n' +
+    'よろしければ「承諾」と送ってね（キャンセル可）'
+  await safeReply(event.replyToken, text)
+}
+async function handleLove40Flow(event, session) {
+  if (!(event.type === 'message' && event.message?.type === 'text')) return false
+  const t = (event.message.text || '').trim().normalize('NFKC')
+
+  if (session.love_step === 'PRICE') {
+    if (t === '承諾') {
+      await setUserFlow(session.user_id, 'love40', { love_step: 'Q_START', love_answers: [] })
+      await safeReply(
+        event.replyToken,
+        'ありがとう🌸\nこのあと40問を少しずつ聞くね。\nまずは「開始」と送ってスタート！'
+      )
+      return true
+    }
+    if (t === 'キャンセル') {
+      await setUserFlow(session.user_id, 'idle', { love_step: null })
+      await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
+      return true
+    }
+    await safeReply(event.replyToken, '進める場合は「承諾」と送ってね🌸')
+    return true
+  }
+
+  if (session.love_step === 'Q_START') {
+    if (t !== '開始') {
+      await safeReply(event.replyToken, 'スタート準備OKなら「開始」と送ってね✨')
+      return true
+    }
+    // ここであなたの本番の質問配列に接続して出題していく想定
+    await safeReply(
+      event.replyToken,
+      'Q1. 山道で迷ったあなた。A:細い下り坂 / B:広い上り坂\n（A or B で回答）'
+    )
+    await setUserFlow(session.user_id, 'love40', { love_step: 'Q1' })
+    return true
+  }
+
+  // ここからはダミー回答処理（Q1のみ）。本番は質問配列でループしてね。
+  if (session.love_step === 'Q1') {
+    if (!/^(A|B)$/i.test(t)) {
+      await safeReply(event.replyToken, 'A か B で答えてね🌸')
+      return true
+    }
+    await safeReply(
+      event.replyToken,
+      'OK、回答ありがとう！続きは本番の質問配列に接続して進めてね。\n今日はここで受付を完了します✨'
+    )
+    await setUserFlow(session.user_id, 'idle', { love_step: null })
+    return true
+  }
+
+  return false
+}
+
+/* =========================
+   AI相談（通常会話）本体
+   ========================= */
+async function handleAiChat(event, session) {
+  // テキスト以外はスルー（必要なら画像等の分岐を追加）
+  if (!(event.type === 'message' && event.message?.type === 'text')) return false
+
+  const userId = session.user_id
   const userText = (event.message.text || '').trim()
   const today = getJapanDateString()
   const todayNote = getTodayNoteStable()
 
   // 管理者モード
   if (userText === ADMIN_SECRET) {
-    return safeReply(
+    await safeReply(
       event.replyToken,
       `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」\nURL：${todayNote.url}`
     )
+    return true
   }
 
   // 電話相談の問い合わせ
@@ -137,52 +345,40 @@ export default async function handleAI(event) {
       'リッチメニューの「予約」からかんたんに予約してね\n' +
       'お電話はAIじゃなくて人の相談員がやさしく寄りそうよ🌸'
     if (RESERVE_URL) {
-      return safeReply(event.replyToken, {
+      await safeReply(event.replyToken, {
         type: 'text',
         text: base,
-        quickReply: { items: [{ type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } }] }
+        quickReply: {
+          items: [{ type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } }],
+        },
       })
+    } else {
+      await safeReply(event.replyToken, base)
     }
-    return safeReply(event.replyToken, base)
-  }
-
-  // 既存セッション読み込み
-  let session = await loadSession(userId)
-  let count = 0
-  let messages = []
-  let greeted = false
-  let lastDate = today
-  let authenticated = false
-  let authDate = null
-
-  if (session) {
-    const sameDay = session.last_date === today
-    const recent = isRecent(session.updated_at)
-    count = sameDay ? (session.count || 0) : 0
-    messages = recent ? (session.messages || []) : []
-    greeted = !!session.greeted
-    lastDate = session.last_date || today
-    authenticated = sameDay ? !!session.authenticated : false
-    authDate = sameDay ? (session.auth_date || null) : null
-  } else {
-    session = { user_id: userId }
+    return true
   }
 
   // 合言葉（noteのパス）で当日解放
   if (userText === todayNote.password) {
     const newSession = {
       ...session,
-      user_id: userId,
-      count,
-      messages,
       last_date: today,
-      greeted,
       authenticated: true,
-      auth_date: today
+      auth_date: today,
     }
     await saveSession(newSession)
-    return safeReply(event.replyToken, '合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕')
+    await safeReply(event.replyToken, '合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕')
+    return true
   }
+
+  // 会話履歴と回数をロード
+  const sameDay = session.last_date === today
+  const recent = isRecent(session.updated_at)
+  let count = sameDay ? (session.count || 0) : 0
+  let messages = recent ? (session.messages || []) : []
+  let greeted = !!session.greeted
+  let authenticated = sameDay ? !!session.authenticated : false
+  let authDate = sameDay ? (session.auth_date || null) : null
 
   // キャラプロンプト + 短文回答モード
   const persona = await getCharacterPrompt(userId)
@@ -244,12 +440,13 @@ export default async function handleAI(event) {
   // セッション保存
   const toSave = {
     user_id: userId,
+    flow: 'ai',
     count: newCount,
     messages,
-    last_date: today,
+    last_date: getJapanDateString(),
     greeted,
     authenticated,
-    auth_date: authDate
+    auth_date: authDate,
   }
   try {
     await saveSession(toSave)
@@ -257,6 +454,50 @@ export default async function handleAI(event) {
     console.error('[SESSION SAVE ERROR]', e)
   }
 
-  // 返信
   await safeReply(event.replyToken, replyText)
+  return true
+}
+
+/* =========================
+   エクスポート（イベント単位ハンドラ）
+   ========================= */
+// 既存の呼び出し互換のため default export は「イベント1件を処理する関数」のまま
+export default async function handleAI(event) {
+  const userId = event.source?.userId
+  if (!userId) return
+
+  // 1) リッチメニューテキスト（完全一致）を最優先で判定
+  const handledMenu = await handleRichMenuText(event, userId)
+  if (handledMenu) return
+
+  // 2) 進行中フローに応じて処理
+  const session = (await loadSession(userId)) || { user_id: userId, flow: 'idle' }
+  const flow = session.flow || 'idle'
+
+  // 手相フロー（画像／テキスト両方に対応）
+  if (flow === 'palm') {
+    const done = await handlePalmistryFlow(event, session)
+    if (done) return
+  }
+
+  // 恋愛40問フロー
+  if (flow === 'love40') {
+    const done = await handleLove40Flow(event, session)
+    if (done) return
+  }
+
+  // AI相談（idle または ai の時は通常会話）
+  if (event.type === 'message' && event.message?.type === 'text') {
+    await setUserFlow(userId, 'ai') // idle の場合は ai として扱う
+    await handleAiChat(event, { ...(session || {}), user_id: userId })
+    return
+  }
+
+  // ここに来たら未対応イベント（画像スタンプ等）→軽いガイド
+  if (event.type === 'message' && event.message?.type !== 'text') {
+    await safeReply(
+      event.replyToken,
+      'ありがとう！文字で送ってくれたら、もっと具体的にお手伝いできるよ🌸'
+    )
+  }
 }
