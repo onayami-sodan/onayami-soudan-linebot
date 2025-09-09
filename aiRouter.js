@@ -458,7 +458,10 @@ async function handleAiChat(event, session) {
 /* =========================
    エクスポート（イベント1件を処理）
    ========================= */
-export default async function handleAI(event) {
+export async function handleAI(event) {
+  // ... （中身はそのまま）
+}
+
   const userId = event.source?.userId
   if (!userId) return
 
