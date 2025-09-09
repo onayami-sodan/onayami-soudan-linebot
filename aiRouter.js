@@ -1,15 +1,15 @@
-// apps/ai-line/router.js
-// ESM前提（import）
-// ─────────────────────────────────────────────
-import { aiChat } from '../../services/callGPT.js'
-import { supabase } from '../../services/supabaseClient.js'
-import { getCharacterPrompt } from '../../services/userSettings.js'
-import { safeReply } from '../../services/lineClient.js'
+// aiRouter.js  （直下フラット構成用・完全版）
+// ESM 前提
+
+import { aiChat } from './callGPT.js'
+import { supabase } from './supabaseClient.js'
+import { getCharacterPrompt } from './userSettings.js'
+import { safeReply } from './lineClient.js'
 
 /* =========================
    定数
    ========================= */
-const ADMIN_SECRET = 'azu1228' // 管理者用合言葉（必要に応じて.env化を推奨）
+const ADMIN_SECRET = 'azu1228' // 必要なら .env 化推奨
 const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
 const MAX_HISTORY_PAIRS = 12 // 保存する user/assistant の最大往復数（肥大化防止）
@@ -21,7 +21,7 @@ const MENU_MAP = new Map([
   ['恋愛診断書',     'love40'],
 ])
 
-// note の日替わり一覧（元リストのまま）
+// note の日替わり一覧（必要なら差し替え）
 const noteList = [
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
   { password: 'momo34', url: 'https://note.com/noble_loris1361/n/nfbd564d7f9fb' },
@@ -291,7 +291,6 @@ async function handleLove40Flow(event, session) {
       await safeReply(event.replyToken, 'スタート準備OKなら「開始」と送ってね✨')
       return true
     }
-    // ここであなたの本番の質問配列に接続して出題していく想定
     await safeReply(
       event.replyToken,
       'Q1. 山道で迷ったあなた。A:細い下り坂 / B:広い上り坂\n（A or B で回答）'
@@ -300,7 +299,6 @@ async function handleLove40Flow(event, session) {
     return true
   }
 
-  // ここからはダミー回答処理（Q1のみ）。本番は質問配列でループしてね。
   if (session.love_step === 'Q1') {
     if (!/^(A|B)$/i.test(t)) {
       await safeReply(event.replyToken, 'A か B で答えてね🌸')
@@ -321,7 +319,6 @@ async function handleLove40Flow(event, session) {
    AI相談（通常会話）本体
    ========================= */
 async function handleAiChat(event, session) {
-  // テキスト以外はスルー（必要なら画像等の分岐を追加）
   if (!(event.type === 'message' && event.message?.type === 'text')) return false
 
   const userId = session.user_id
@@ -329,7 +326,7 @@ async function handleAiChat(event, session) {
   const today = getJapanDateString()
   const todayNote = getTodayNoteStable()
 
-  // 管理者モード
+  // 管理者モード（合言葉）
   if (userText === ADMIN_SECRET) {
     await safeReply(
       event.replyToken,
@@ -459,14 +456,13 @@ async function handleAiChat(event, session) {
 }
 
 /* =========================
-   エクスポート（イベント単位ハンドラ）
+   エクスポート（イベント1件を処理）
    ========================= */
-// 既存の呼び出し互換のため default export は「イベント1件を処理する関数」のまま
 export default async function handleAI(event) {
   const userId = event.source?.userId
   if (!userId) return
 
-  // 1) リッチメニューテキスト（完全一致）を最優先で判定
+  // 1) リッチメニュー（完全一致）を最優先で判定
   const handledMenu = await handleRichMenuText(event, userId)
   if (handledMenu) return
 
@@ -493,7 +489,7 @@ export default async function handleAI(event) {
     return
   }
 
-  // ここに来たら未対応イベント（画像スタンプ等）→軽いガイド
+  // 未対応イベント（画像スタンプ等）→軽いガイド
   if (event.type === 'message' && event.message?.type !== 'text') {
     await safeReply(
       event.replyToken,
@@ -501,4 +497,3 @@ export default async function handleAI(event) {
     )
   }
 }
-
