@@ -1,31 +1,32 @@
-// aiRouter.js  （直下フラット構成・ESM・フル実装）
-// - リッチメニューは同義語でも即切替（flowがidleでなくてもOK）
-// - 恋愛診断：questions.js の4択を Quick Reply で出題（本文/数字でも回答可）
+// aiRouter.js  （直下フラット構成・ESM・フル完全版）
+// - リッチメニュー即切替（同義語対応）
+// - 恋愛診断：questions.js の4択を Quick Reply ボタンで出題
 // - 手相診断：全ステップをボタン化（承諾/性別/年代/診断手/撮影ガイド）
-// - AI相談：従来どおり（認証回数制限・note日替わりパス対応）
+// - PRICEステップに保存済みの案内文をフルで組み込み
+// - AI相談：回数制限・note日替わりパス
 
 import { aiChat } from './callGPT.js'
 import { supabase } from './supabaseClient.js'
 import { getCharacterPrompt } from './userSettings.js'
 import { safeReply } from './lineClient.js'
-import { QUESTIONS } from './questions.js' // 4択×40問 {id,text,choices[4]}
+import { QUESTIONS } from './questions.js' // export const QUESTIONS = [...]（4択×40問）前提
 
 /* =========================
    定数
    ========================= */
-const ADMIN_SECRET = 'azu1228' // .env推奨
+const ADMIN_SECRET = 'azu1228' // .env 推奨
 const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
-const MAX_HISTORY_PAIRS = 12
+const MAX_HISTORY_PAIRS = 12 // user/assistant の往復上限
 
 // リッチメニュー（厳密一致のベース）
 const MENU_MAP = new Map([
   ['AI相談員ちゃん', 'ai'],
-  ['手相占い診断', 'palm'],
-  ['恋愛診断書', 'love40'],
+  ['手相占い診断',   'palm'],
+  ['恋愛診断書',     'love40'],
 ])
 
-// 手相：年齢（年代）ボタン
+// 手相：年代ボタン
 const PALM_AGE_OPTIONS = [
   '10代未満', '10代', '20代', '30代', '40代', '50代', '60代', '70代以上',
 ]
@@ -78,7 +79,59 @@ const noteList = [
 ]
 
 /* =========================
-   共通ユーティリティ
+   案内文（保存版）　※LINEの1メッセージに収めてQuick Reply添付
+   ========================= */
+const PALM_INTRO_TEXT = [
+  '✋ 手相診断のご案内 🌸',
+  '',
+  '手のひらには、あなたの運勢や心の傾向が刻まれています',
+  '🌙 左手 … 生まれ持った運勢や内面',
+  '☀️ 右手 … 自分で切り拓いてきた未来や現在の状態',
+  '',
+  '診断を受けることで…',
+  '・今の恋愛や人間関係の課題を整理',
+  '・これからの仕事や人生の方向性を見直し',
+  '・自分では気づきにくい性格や強みを発見',
+  '',
+  '気になる人の手相を見れば…',
+  '・相手の性格や恋愛傾向がわかる',
+  '・相性や距離感のヒントになる',
+  '・家族や子どもの運勢を知るきっかけにも',
+  '',
+  '📄 診断作成料金（今だけ特別価格）',
+  '1) フル診断（30項目カルテ） 10,000円 → 4,980円',
+  '2) 学生支援（1項目診断）   2,500円 → 1,500円',
+  '3) 相性診断（右手2枚セット） 6,000円 → 2,980円',
+  '',
+  '⏱ お届け：48時間以内',
+  '',
+  '✅ 進める場合は「承諾」を押してね（キャンセル可）',
+].join('\n')
+
+const LOVE_INTRO_TEXT = [
+  '💘 恋愛診断書（40問）ご案内',
+  '',
+  'あなたの「恋のクセ」「相性の傾向」「距離感の取り方」を、40問の直感テストで読み解きます',
+  '結果は読みやすいレポート形式でお届け',
+  '',
+  'おすすめ：片思い/復縁/結婚の迷いを整理・同じ失敗の要因を把握・魅力や“刺さる距離感”を知って関係を進めたい方に',
+  '',
+  'わかること：恋愛タイプ・依存/尽くしサイン・連絡/デート頻度の最適解・つまずきやすい場面と回避・相手タイプ別アプローチ',
+  '',
+  '🧭 進み方（選択式）',
+  '1) 承諾 → 2) 開始 → 3) Q1〜Q40を4択でタップ → 4) レポートお届け',
+  '所要時間：5〜8分（途中離脱OK）',
+  '',
+  '📄 お届け内容：総合タイプ判定、強み/つまずき、今すぐの一歩、相手タイプ別の距離の縮め方、セルフケア',
+  '💳 料金：フル 2,980円 / ライト 1,500円（学割あり）',
+  '⏱ 目安：24〜48時間以内',
+  '🔐 プライバシー：診断以外の目的では利用しません',
+  '',
+  '✅ 進める場合は「承諾」を押してね（キャンセル可）',
+].join('\n')
+
+/* =========================
+   ユーティリティ
    ========================= */
 function getJapanDateString() {
   const now = new Date()
@@ -165,7 +218,7 @@ async function setUserFlow(userId, flow, extra = {}) {
 }
 
 /* =========================
-   リッチメニュー（テキスト送信）判定
+   リッチメニュー（テキスト切替）判定
    ========================= */
 async function handleRichMenuText(event, userId) {
   if (event.type !== 'message' || event.message?.type !== 'text') return false
@@ -174,7 +227,7 @@ async function handleRichMenuText(event, userId) {
   const text = (event.message.text || '').trim().normalize('NFKC')
   const normalized = text.replace(/\s+/g, '')
   const aliasMap = new Map([
-    ...MENU_MAP, // 既存の完全一致
+    ...MENU_MAP, // 完全一致
     ['AI相談', 'ai'],
     ['相談', 'ai'],
     ['占い', 'ai'],
@@ -184,7 +237,7 @@ async function handleRichMenuText(event, userId) {
   const app = aliasMap.get(text) || aliasMap.get(normalized)
   if (!app) return false
 
-  // ★ flowの状態に関係なく即切替（ユーザー操作を最優先）
+  // ★flowに関係なく即切替（ユーザー操作最優先）
   if (app === 'ai') {
     await setUserFlow(userId, 'ai')
     await safeReply(event.replyToken, 'AI相談員ちゃんを開きますね🌸')
@@ -210,7 +263,7 @@ async function handleRichMenuText(event, userId) {
 async function sendPalmistryIntro(event) {
   await replyWithChoices(
     event.replyToken,
-    '✋ 手相診断のご案内\n片手3,000円（今だけ特別）',
+    PALM_INTRO_TEXT,
     [
       { label: '承諾', text: '承諾' },
       { label: 'キャンセル', text: 'キャンセル' },
@@ -229,7 +282,7 @@ async function handlePalmistryFlow(event, session) {
         event.replyToken,
         'お写真を受け取りました📸\n順番に拝見して診断します。48時間以内にお届けしますね🌸'
       )
-      await setUserFlow(session.user_id, 'idle', { palm_step: null })
+      await setUserFlow(session.user_id, 'idle', { palm_step: null }) // 受付で終了
       return true
     }
     return false
@@ -350,7 +403,7 @@ async function handlePalmistryFlow(event, session) {
 async function sendLove40Intro(event) {
   await replyWithChoices(
     event.replyToken,
-    '💘 恋愛診断書（40問）\n承諾後に質問を進めます。',
+    LOVE_INTRO_TEXT,
     [
       { label: '承諾', text: '承諾' },
       { label: 'キャンセル', text: 'キャンセル' },
@@ -384,7 +437,7 @@ async function handleLove40Flow(event, session) {
   if (!(event.type === 'message' && event.message?.type === 'text')) return false
   const t = (event.message.text || '').trim().normalize('NFKC')
 
-  // 料金案内→承諾/キャンセル（ボタン対応）
+  // 料金案内→承諾/キャンセル（ボタン）
   if (session.love_step === 'PRICE') {
     if (t === '承諾') {
       await setUserFlow(session.user_id, 'love40', { love_step: 'Q', love_answers: [], love_idx: 0 })
@@ -393,15 +446,17 @@ async function handleLove40Flow(event, session) {
         'ありがとう🌸\nこのあと少しずつ質問するね。\n準備OKなら「開始」を押してね',
         [{ label: '開始', text: '開始' }]
       )
-    } else if (t === 'キャンセル') {
+      return true
+    }
+    if (t === 'キャンセル') {
       await setUserFlow(session.user_id, 'idle', { love_step: null, love_idx: null })
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
-    } else {
-      await replyWithChoices(event.replyToken, '進める場合は「承諾」を押してね🌸', [
-        { label: '承諾', text: '承諾' },
-        { label: 'キャンセル', text: 'キャンセル' },
-      ])
+      return true
     }
+    await replyWithChoices(event.replyToken, '進める場合は「承諾」を押してね🌸', [
+      { label: '承諾', text: '承諾' },
+      { label: 'キャンセル', text: 'キャンセル' },
+    ])
     return true
   }
 
@@ -453,7 +508,7 @@ async function handleLove40Flow(event, session) {
 }
 
 /* =========================
-   AI相談（通常会話）
+   AI相談（通常会話）本体
    ========================= */
 async function handleAiChat(event, session) {
   if (!(event.type === 'message' && event.message?.type === 'text')) return false
@@ -483,9 +538,7 @@ async function handleAiChat(event, session) {
         type: 'text',
         text: base,
         quickReply: {
-          items: [
-            { type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } },
-          ],
+          items: [{ type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } }],
         },
       })
     } else {
@@ -510,17 +563,16 @@ async function handleAiChat(event, session) {
   // 会話履歴と回数をロード
   const sameDay = session.last_date === today
   const recent = isRecent(session.updated_at)
-  let count = sameDay ? session.count || 0 : 0
-  let messages = recent ? session.messages || [] : []
+  let count = sameDay ? (session.count || 0) : 0
+  let messages = recent ? (session.messages || []) : []
   let greeted = !!session.greeted
   let authenticated = sameDay ? !!session.authenticated : false
-  let authDate = sameDay ? session.auth_date || null : null
+  let authDate = sameDay ? (session.auth_date || null) : null
 
   // キャラプロンプト + 短文回答モード
   const persona = await getCharacterPrompt(userId)
-  const needsShort = /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/i.test(
-    userText
-  )
+  const needsShort =
+    /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/i.test(userText)
   const systemPrompt = needsShort
     ? `${persona}\n【ルール】以下を必ず守って答えて\n・結論を最初に出す（YES / NO / やめた方がいい など）\n・最大3行まで\n・回りくどい共感・曖昧表現は禁止\n・一度で終わる返答を意識`
     : persona
