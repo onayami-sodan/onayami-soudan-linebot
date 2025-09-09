@@ -1,11 +1,29 @@
-// featureFlags.js（暫定：AI=OPEN、手相＆恋愛=準備中）
-// 必要に応じて true/false を切り替えて使える簡易フラグ
-const flags = { ai: true, palm: true, renai: true } // 全部動かすなら全部 true
+// /services/featureFlags.js
+import { supabase } from './supabaseClient.js'
 
-export async function isOpen(key) {
-  return !!flags[key]
-}
-export async function setOpen(key, val) {
-  flags[key] = !!val
+const TABLE = 'service_status' // Supabaseに作るテーブル名
+
+// サービスが利用可能か確認
+export async function isOpen(service) {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('status')
+    .eq('service', service)
+    .maybeSingle()
+
+  if (error) {
+    console.error('isOpen error:', error)
+    return false
+  }
+  return data?.status === 'active'
 }
 
+// サービスの状態をセット（true=active / false=preparing）
+export async function setOpen(service, open) {
+  const { error } = await supabase.from(TABLE).upsert({
+    service,
+    status: open ? 'active' : 'preparing',
+    updated_at: new Date().toISOString(),
+  })
+  if (error) console.error('setOpen error:', error)
+}
