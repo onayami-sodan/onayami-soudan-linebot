@@ -2,7 +2,8 @@
 import express from 'express'
 import { messagingApi } from '@line/bot-sdk'
 import { safeReply } from './services/lineClient.js'
-import handleAI from './apps/ai-line/router.js'
+import handleAI from './aiRouter.js'
+
 import { isOpen, setOpen } from './featureFlags.js'
 
 const app = express()
