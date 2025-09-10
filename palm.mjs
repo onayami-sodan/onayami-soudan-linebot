@@ -1,4 +1,4 @@
-// palm.mjs（完全版フル：大きいFlexボタンUX・案内はテキスト+横ボタン / 縦ボタンで各選択）
+// palm.mjs（完全版フル：大きいFlexボタンUX + 最終承諾フロー付き）
 
 import { supabase } from './supabaseClient.js'
 import { safeReply, push } from './lineClient.js'
@@ -20,7 +20,7 @@ const PALM_AGE_TO_NUMBER = new Map([
   ['70代以上', 75],
 ])
 
-// 案内の長文（まずテキストで全文表示 → 直後に横ボタンFlex）
+// 案内（テキスト → 直後に横ボタンFlex）
 const PALM_INTRO_TEXT = [
   '✋ 手相診断のご案内 🌸',
   '',
@@ -38,19 +38,27 @@ const PALM_INTRO_TEXT = [
   '・相性や距離感のヒントになる',
   '・家族や子どもの運勢を知るきっかけにも',
   '',
+  
+
   '📄 診断作成料金（今だけ特別価格）',
   '1) フル診断（30項目カルテ） 10,000円 → 4,980円',
   '2) 学生支援（1項目診断）   2,500円 → 1,500円',
   '3) 相性診断（右手2枚セット） 6,000円 → 2,980円',
+  '',
+   '💳 お支払い方法',
+  '・PayPay',
+  '・クレジットカード（Visa / Master / JCB / AMEX など）',
+  '・携帯キャリア決済（SoftBank / au / docomo）',
+  '・PayPal',
   '',
   '⏱ お届け：48時間以内',
   '',
   '✅ 進める場合は「承諾」を押してね（キャンセル可）',
 ]
 
-// ---------- Flex builders ----------
+/* ========== Flex builders ========== */
 
-// 案内：横並びの大きい色付きボタン（承諾 / はじめの画面へ）
+// 案内：横並びの大きいボタン（承諾 / はじめの画面へ）
 function buildIntroButtonsFlex() {
   return {
     type: 'flex',
@@ -80,8 +88,7 @@ function buildIntroButtonsFlex() {
               },
               {
                 type: 'button',
-                style: 'secondary',
-                color: '#FF4081',
+                style: 'secondary', // ← secondaryにcolorは付けない
                 height: 'md',
                 action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
               },
@@ -94,7 +101,7 @@ function buildIntroButtonsFlex() {
   }
 }
 
-// 汎用：縦並びの大きい選択ボタン（押し間違い防止に余白）
+// 汎用：縦並びの大きい選択ボタン
 function buildVerticalButtonsFlex({ title, labels, color = '#81D4FA' }) {
   return {
     type: 'flex',
@@ -110,14 +117,8 @@ function buildVerticalButtonsFlex({ title, labels, color = '#81D4FA' }) {
         contents: [
           { type: 'text', text: title, weight: 'bold', size: 'md' },
           ...labels.map((label) => ([
-            {
-              type: 'button',
-              style: 'primary',
-              height: 'sm',
-              color,
-              action: { type: 'message', label, text: label },
-            },
-            { type: 'separator', margin: 'md', color: '#FFFFFF00' }, // 透明＝余白
+            { type: 'button', style: 'primary', height: 'sm', color, action: { type: 'message', label, text: label } },
+            { type: 'separator', margin: 'md', color: '#FFFFFF00' },
           ])).flat(),
         ],
       },
@@ -142,21 +143,9 @@ function buildHandFlex() {
         contents: [
           { type: 'text', text: '左手／右手どちらを診断する？', weight: 'bold', size: 'md' },
           { type: 'text', text: '・左手：先天傾向（生まれ持った性質）\n・右手：未来（今の状態・努力の結果）', wrap: true, size: 'sm' },
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'sm',
-            color: '#F59FB0',
-            action: { type: 'message', label: '左手', text: '左手' },
-          },
+          { type: 'button', style: 'primary', height: 'sm', color: '#F59FB0', action: { type: 'message', label: '左手', text: '左手' } },
           { type: 'separator', margin: 'md', color: '#FFFFFF00' },
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'sm',
-            color: '#F59FB0',
-            action: { type: 'message', label: '右手', text: '右手' },
-          },
+          { type: 'button', style: 'primary', height: 'sm', color: '#F59FB0', action: { type: 'message', label: '右手', text: '右手' } },
         ],
       },
       styles: { body: { backgroundColor: '#FFF9FB' } },
@@ -180,12 +169,39 @@ function buildGuideFlex() {
         contents: [
           { type: 'text', text: '📸 撮影ガイド', weight: 'bold', size: 'md' },
           { type: 'text', text: '・手のひら全体が写るように\n・指先まで入れる\n・明るい場所でピントを合わせて', wrap: true },
+          { type: 'button', style: 'primary', height: 'md', color: '#4CAF50', action: { type: 'message', label: '準備完了', text: '準備完了' } },
+        ],
+      },
+      styles: { body: { backgroundColor: '#FFF9FB' } },
+    },
+  }
+}
+
+// 最終承諾：横並びボタン（承諾 / トークTOP）※恋愛診断と同文面
+function buildFinalConfirmFlex() {
+  return {
+    type: 'flex',
+    altText: '診断書作成の最終確認',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: '診断書の作成には 3,980円（税込）が必要です。', wrap: true, weight: 'bold' },
+          { type: 'text', text: '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね', wrap: true, size: 'sm' },
           {
-            type: 'button',
-            style: 'primary',
-            height: 'md',
-            color: '#4CAF50',
-            action: { type: 'message', label: '準備完了', text: '準備完了' },
+            type: 'box',
+            layout: 'horizontal',
+            spacing: 'md',
+            margin: 'lg',
+            contents: [
+              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md', action: { type: 'message', label: '承諾', text: '承諾' } },
+              { type: 'button', style: 'secondary', height: 'md', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
+            ],
           },
         ],
       },
@@ -201,9 +217,7 @@ export async function sendPalmistryIntro(event) {
   const userId = event.source?.userId
   if (userId) await setSession(userId, { flow: 'palm', palm_step: 'PRICE' })
 
-  // 1) 長文をまずテキストで
   await safeReply(event.replyToken, PALM_INTRO_TEXT.join('\n'))
-  // 2) 直後に横並びボタンFlex（承諾 / はじめの画面へ）
   if (userId) await push(userId, buildIntroButtonsFlex())
 }
 
@@ -233,7 +247,7 @@ export async function handlePalm(event) {
   if (!(event.type === 'message' && event.message?.type === 'text')) return
 
   const raw = (event.message.text || '').trim().normalize('NFKC')
-  const tn = raw.replace(/\s+/g, '') // “準備 完了”“ 左手 ”などにも対応
+  const tn = raw.replace(/\s+/g, '') // “準備 完了” などにも対応
   const s = await loadSession(userId)
   const step = s?.palm_step || 'PRICE'
 
@@ -253,7 +267,6 @@ export async function handlePalm(event) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
     }
-    // 迷い入力 → 案内再掲（テキスト + 横Flex）
     await safeReply(event.replyToken, PALM_INTRO_TEXT.join('\n'))
     await push(userId, buildIntroButtonsFlex())
     return
@@ -309,18 +322,48 @@ export async function handlePalm(event) {
     return
   }
 
-  // GUIDE
+  // GUIDE → 最終承諾（ここで料金の最終確認を出す）
   if (step === 'GUIDE') {
     if (tn === '準備完了') {
-      await setSession(userId, { palm_step: 'WAIT_IMAGE' })
-      await safeReply(event.replyToken, 'OK！画像を送ってください✋（1枚）')
+      await setSession(userId, { palm_step: 'CONFIRM_PAY' })
+      await safeReply(
+        event.replyToken,
+        '🧾 最終確認\n' +
+        'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+        '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+      )
+      await push(userId, buildFinalConfirmFlex())
       return
     }
     await safeReply(event.replyToken, buildGuideFlex())
     return
   }
 
-  // WAIT_IMAGE / PENDING_RESULT などでテキストが来た場合
+  // 最終承諾
+  if (step === 'CONFIRM_PAY') {
+    if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
+      // 画像受付に遷移
+      await setSession(userId, { palm_step: 'WAIT_IMAGE' })
+      await safeReply(event.replyToken, 'OK！画像を送ってください✋（1枚）')
+      return
+    }
+    if (tn === 'トークTOP') {
+      await setSession(userId, { flow: 'idle', palm_step: null })
+      await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
+      return
+    }
+    // 迷い入力 → 再掲
+    await safeReply(
+      event.replyToken,
+      '🧾 最終確認\n' +
+      'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+      '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+    )
+    await push(userId, buildFinalConfirmFlex())
+    return
+  }
+
+  // WAIT_IMAGE / PENDING_RESULT でテキストが来た場合
   if (step === 'WAIT_IMAGE' || step === 'PENDING_RESULT') {
     await safeReply(
       event.replyToken,
