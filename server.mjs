@@ -14,19 +14,24 @@ import { ENTRY_TEXT } from './texts.mjs'
 const app = express()
 app.use(express.json())
 
+// LINE SDK クライアント（署名検証は省略）
 new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 })
 
+// 管理者
 const ADMIN_IDS = (process.env.ADMIN_USER_IDS || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean)
 
+// 管理対象サービスキー
 const SERVICES = ['ai', 'palm', 'renai']
 
+/** -------- ユーティリティ -------- **/
 function parseAdminCommand(text) {
   const t = (text || '').trim()
+  // 日本語コマンド
   if (/^(恋愛|れんあい)準備中$/.test(t)) return { app: 'renai', open: false }
   if (/^(恋愛|れんあい)再開$/.test(t))   return { app: 'renai', open: true }
   if (/^手相準備中$/.test(t))            return { app: 'palm',  open: false }
@@ -35,6 +40,7 @@ function parseAdminCommand(text) {
   if (/^(AI|ＡＩ)再開$/.test(t))          return { app: 'ai',    open: true }
   if (/^(状態|ステータス)$/.test(t))      return { status: true }
 
+  // スラッシュコマンド
   if (t.startsWith('/')) {
     const [cmdRaw, appRaw] = t.slice(1).split(/\s+/, 2)
     const cmd = (cmdRaw || '').toLowerCase()
@@ -51,6 +57,7 @@ function whoami(event) {
   return `your userId: ${event?.source?.userId || 'unknown'}`
 }
 
+/** -------- ルーティング -------- **/
 app.get('/ping', (_, res) => res.status(200).send('pong'))
 
 app.post('/webhook', async (req, res) => {
@@ -61,6 +68,7 @@ app.post('/webhook', async (req, res) => {
   }
 })
 
+/** -------- イベント処理 -------- **/
 async function handleEventSafely(event) {
   try {
     if (event.type === 'message' && event.message?.type === 'text') {
@@ -68,35 +76,45 @@ async function handleEventSafely(event) {
       const uid = event.source?.userId
       const isAdmin = ADMIN_IDS.includes(uid)
 
+      // /whoami は誰でも使える
       if (text === '/whoami') {
         return safeReply(event.replyToken, whoami(event))
       }
 
-      // 💌 トップへ → flow=idle にして ENTRY_TEXT を返す
+      // 💌 はじめの画面へ（トークTOP）→ flow=idle にして ENTRY_TEXT を返す
       if (text === 'トークTOP') {
         try {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from('user_sessions')
             .select('*')
             .eq('user_id', uid)
             .maybeSingle()
+          if (error) throw error
 
           const row = data || { user_id: uid }
-          await supabase.from('user_sessions').upsert({
+          const { error: upErr } = await supabase.from('user_sessions').upsert({
             ...row,
             user_id: uid,
             flow: 'idle',
             palm_step: null,
             love_step: null,
             love_idx: null,
+            // 必要に応じて完全初期化したい場合は以下をアンコメント
+            // count: 0,
+            // messages: [],
+            // greeted: false,
+            // authenticated: false,
+            // auth_date: null,
             updated_at: new Date().toISOString(),
           })
+          if (upErr) throw upErr
         } catch (e) {
           console.error('[RESET_TO_TOP ERROR]', e)
         }
         return safeReply(event.replyToken, ENTRY_TEXT)
       }
 
+      // 管理者コマンド
       const cmd = parseAdminCommand(text)
       if (cmd) {
         if (!isAdmin) {
@@ -112,14 +130,16 @@ async function handleEventSafely(event) {
           await setOpen(cmd.app, cmd.open)
           return safeReply(
             event.replyToken,
-            cmd.open
-              ? `✅ ${cmd.app} を OPEN にしました`
-              : `⛔ ${cmd.app} を 準備中 にしました`
+            cmd.open ? `✅ ${cmd.app} を OPEN にしました`
+                     : `⛔ ${cmd.app} を 準備中 にしました`
           )
         }
       }
     }
-    return handleAI(event)
+
+    // 通常処理は aiRouter に委譲（★必ず await）
+    await handleAI(event)
+    return
   } catch (err) {
     console.error('[ERROR] handleEventSafely:', err)
     if (event?.replyToken) {
@@ -130,5 +150,6 @@ async function handleEventSafely(event) {
   }
 }
 
+/** -------- 起動 -------- **/
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => console.log(`server.mjs listening on ${PORT}`))
