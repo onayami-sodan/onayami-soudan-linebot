@@ -386,6 +386,20 @@ export async function handleLove(event) {
 
   // PROFILE_AGE
   if (s?.love_step === 'PROFILE_AGE') {
+
+    // ★ ループ防止：まれにPROFILE_AGEのまま「開始」が届くケースを救済
+    if (tn === '開始') {
+      await setSession(userId, {
+        love_step: 'Q',
+        love_profile: s.love_profile || {},
+        love_idx: 0,
+        love_answers: s.love_answers || [],
+        love_answered_map: s.love_answered_map || {},
+      })
+      await sendNextLoveQuestion(event, { ...s, love_step: 'Q', love_idx: 0 })
+      return
+    }
+
     const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
     if (!okAges.includes(tn)) {
       await safeReply(event.replyToken, {
