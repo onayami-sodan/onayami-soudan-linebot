@@ -1,13 +1,14 @@
 /* =========================
-   server.js（💌 はじめの画面へ対応版）
+   server.mjs（💌 はじめの画面へ対応版｜TOPでflowをidleにリセット）
    ========================= */
 import 'dotenv/config'
 import express from 'express'
 import { messagingApi } from '@line/bot-sdk'
 
 import { safeReply } from './lineClient.js'
-import { handleAI } from './aiRouter.mjs'          // ai/palm/renai の通常処理をここに委譲
+import { handleAI } from './aiRouter.mjs'        // ai/palm/love の通常処理をここに委譲
 import { isOpen, setOpen } from './featureFlags.js'
+import { supabase } from './supabaseClient.js'   // ★ 追加：Supabaseを直接使う
 
 const app = express()
 app.use(express.json())
@@ -101,8 +102,28 @@ async function handleEventSafely(event) {
         return safeReply(event.replyToken, whoami(event))
       }
 
-      // 💌 はじめの画面へ → ENTRY_TEXT に戻る
+      // 💌 はじめの画面へ → flowをidleにしてENTRY_TEXTを返す（Bパターン）
       if (text === 'トークTOP') {
+        try {
+          const { data } = await supabase
+            .from('user_sessions')
+            .select('*')
+            .eq('user_id', uid)
+            .maybeSingle()
+
+          const row = data || { user_id: uid }
+          await supabase.from('user_sessions').upsert({
+            ...row,
+            user_id: uid,
+            flow: 'idle',
+            palm_step: null,
+            love_step: null,
+            love_idx: null,
+            updated_at: new Date().toISOString(),
+          })
+        } catch (e) {
+          console.error('[RESET_TO_TOP ERROR]', e)
+        }
         return safeReply(event.replyToken, ENTRY_TEXT)
       }
 
@@ -146,4 +167,4 @@ async function handleEventSafely(event) {
 
 /** -------- 起動 -------- **/
 const PORT = process.env.PORT || 3000
-app.listen(PORT, () => console.log(`server.js listening on ${PORT}`))
+app.listen(PORT, () => console.log(`server.mjs listening on ${PORT}`))
