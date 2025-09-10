@@ -1,10 +1,11 @@
 /*
  =========================
-   love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋表示から（）除去）
+   love.mjs（完全版フル｜重複押下防止QID・最終承諾・表示から（）除去）
    - 案内：長文テキスト + 横並びボタン（Flex）
    - 設問：縦ボタン（Flex）※質問文/選択肢の（）はユーザー表示から除去
+   - 設問ボタンは `Q{id}-{n}` を送信 → サーバでID一致＆未回答のみ採用
    - 設問完了後：3,980円（税込）の最終承諾 → 承諾で48h案内
-   - 回答控え：選択肢（必要なら質問文も）から（）を除去
+   - 回答控え：質問文/選択肢から（）を除去
    - セッションは upsert（部分更新）
  =========================
 */
@@ -17,8 +18,8 @@ import { messagingApi } from '@line/bot-sdk'
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
 
-// ====== 起動時サニティチェック ======
-;(function sanityCheckQuestions() {
+// ====== 起動時サニティチェック（ログ用） ======
+;(() => {
   const n = QUESTIONS?.length || 0
   const last = QUESTIONS?.[n - 1]
   console.log('[QUESTIONS] count=', n, ' last.id=', last?.id, ' last.choices.len=', last?.choices?.length)
@@ -62,11 +63,8 @@ function splitChunks(text, size = 4500) {
 async function replyThenPush(userId, replyToken, bigText) {
   if (!bigText) return
   const chunks = splitChunks(bigText, 4500)
-  if (chunks.length === 0) return
-  await safeReply(replyToken, chunks[0]) // 1通目 reply
-  for (let i = 1; i < chunks.length; i++) {
-    await push(userId, chunks[i])        // 2通目以降 push
-  }
+  await safeReply(replyToken, chunks[0])
+  for (let i = 1; i < chunks.length; i++) await push(userId, chunks[i])
 }
 
 // ====== LINEニックネーム ======
@@ -76,17 +74,15 @@ async function getLineDisplayName(userId) {
     const client = new messagingApi.MessagingApiClient({ channelAccessToken: LINE_ACCESS_TOKEN })
     const prof = await client.getProfile(userId)
     return prof?.displayName || ''
-  } catch {
-    return ''
-  }
+  } catch { return '' }
 }
 
-// ====== ユーザー表示のクリーンアップ（括弧内メモ除去：全角/半角） ======
+// ====== ユーザー表示クリーンアップ（括弧内メモ除去：全角/半角） ======
 function cleanForUser(str = '') {
   return String(str)
-    .replace(/（[^）]*）/g, '')   // 全角（…）
-    .replace(/\([^)]*\)/g, '')    // 半角(...)
-    .replace(/\s+/g, ' ')         // 余分な空白を1つに
+    .replace(/（[^）]*）/g, '')
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
@@ -94,7 +90,7 @@ function cleanForUser(str = '') {
    Flex builders
    ========================= */
 
-// 案内ボタン：横並び・色分け（長文は別送）
+// 案内ボタン：横並び（承諾 / はじめの画面へ）
 function buildIntroButtonsFlex() {
   return {
     type: 'flex',
@@ -115,19 +111,10 @@ function buildIntroButtonsFlex() {
             spacing: 'md',
             margin: 'lg',
             contents: [
-              {
-                type: 'button',
-                style: 'primary',
-                color: '#4CAF50', // 承諾＝グリーン
-                height: 'md',
-                action: { type: 'message', label: '承諾', text: '承諾' },
-              },
-              {
-                type: 'button',
-                style: 'secondary',
-                height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              }, // ※ secondary に color は付けない（スキーマ準拠）
+              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md',
+                action: { type: 'message', label: '承諾', text: '承諾' } },
+              { type: 'button', style: 'secondary', height: 'md',
+                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         ],
@@ -137,9 +124,9 @@ function buildIntroButtonsFlex() {
   }
 }
 
-// 設問：縦ボタン（押し間違い防止で余白）※表示はクリーン化
+// 設問：縦ボタン（表示はクリーン化）／送信テキストは Q{id}-{n}
 function buildQuestionFlex(q) {
-  const circledNums = ['①', '②', '③', '④']
+  const circled = ['①', '②', '③', '④']
   const qText = cleanForUser(q.text)
   const choiceLabels = q.choices.map((c) => cleanForUser(c))
   return {
@@ -161,7 +148,11 @@ function buildQuestionFlex(q) {
               style: 'primary',
               height: 'sm',
               color: '#F59FB0',
-              action: { type: 'message', label: `${circledNums[i]} ${label}`, text: String(i + 1) },
+              action: {
+                type: 'message',
+                label: `${circled[i]} ${label}`,
+                text: `Q${q.id}-${i + 1}`, // ← 質問ID＋選択肢番号を送る
+              },
             },
             { type: 'separator', margin: 'md', color: '#FFFFFF00' },
           ])).flat(),
@@ -194,19 +185,10 @@ function buildFinalConfirmFlex() {
             spacing: 'md',
             margin: 'lg',
             contents: [
-              {
-                type: 'button',
-                style: 'primary',
-                color: '#4CAF50',
-                height: 'md',
-                action: { type: 'message', label: '承諾', text: '承諾' },
-              },
-              {
-                type: 'button',
-                style: 'secondary',
-                height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              }, // ※ secondary に color は付けない
+              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md',
+                action: { type: 'message', label: '承諾', text: '承諾' } },
+              { type: 'button', style: 'secondary', height: 'md',
+                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         ],
@@ -227,7 +209,7 @@ export async function sendLove40Intro(event) {
 }
 
 /* =========================
-   設問出題（Flex縦ボタン）＋最終承諾への遷移
+   設問出題（Flex）＋最終承諾遷移
    ========================= */
 async function sendNextLoveQuestion(event, session) {
   const idx = session.love_idx ?? 0
@@ -243,13 +225,12 @@ async function sendNextLoveQuestion(event, session) {
     await push(userId, buildFinalConfirmFlex())
     return true
   }
-  const q = QUESTIONS[idx]
-  await safeReply(event.replyToken, buildQuestionFlex(q))
+  await safeReply(event.replyToken, buildQuestionFlex(QUESTIONS[idx]))
   return false
 }
 
 /* =========================
-   回答控え送信＋48h案内（テキストで返す）
+   回答控え送信＋48h案内（テキスト）
    ========================= */
 async function sendAnswersAsTextAndNotice(event, session) {
   const userId = event.source?.userId
@@ -278,7 +259,6 @@ async function sendAnswersAsTextAndNotice(event, session) {
   }
 
   await replyThenPush(userId, event.replyToken, lines.join('\n'))
-
   await push(
     userId,
     '💌 ありがとう！回答を受け取ったよ\n' +
@@ -304,7 +284,12 @@ export async function handleLove(event) {
   // PRICE
   if (s?.love_step === 'PRICE') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
-      await setSession(userId, { love_step: 'PROFILE_GENDER', love_profile: {}, love_answers: [], love_idx: 0 })
+      await setSession(userId, {
+        love_step: 'PROFILE_GENDER',
+        love_profile: {},
+        love_answers: [],
+        love_idx: 0,
+      })
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '性別を選んでね',
@@ -319,16 +304,12 @@ export async function handleLove(event) {
             contents: [
               { type: 'text', text: '性別を選んでね', weight: 'bold', size: 'md' },
               ...['女性', '男性', 'その他'].map((label) => ([
-                {
-                  type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
-                  action: { type: 'message', label, text: label },
-                },
+                { type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
+                  action: { type: 'message', label, text: label } },
                 { type: 'separator', margin: 'md', color: '#FFFFFF00' },
               ])).flat(),
-              {
-                type: 'button', style: 'secondary', height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              },
+              { type: 'button', style: 'secondary', height: 'md',
+                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         },
@@ -386,10 +367,8 @@ export async function handleLove(event) {
           contents: [
             { type: 'text', text: '年代を選んでね', weight: 'bold', size: 'md' },
             ...ages.map((label) => ([
-              {
-                type: 'button', style: 'primary', height: 'sm', color: '#81D4FA',
-                action: { type: 'message', label, text: label },
-              },
+              { type: 'button', style: 'primary', height: 'sm', color: '#81D4FA',
+                action: { type: 'message', label, text: label } },
               { type: 'separator', margin: 'md', color: '#FFFFFF00' },
             ])).flat(),
           ],
@@ -422,7 +401,13 @@ export async function handleLove(event) {
       return
     }
     const profile = { ...(s.love_profile || {}), age: t }
-    await setSession(userId, { love_step: 'Q', love_profile: profile, love_idx: 0, love_answers: [] })
+    await setSession(userId, {
+      love_step: 'Q',
+      love_profile: profile,
+      love_idx: 0,
+      love_answers: [],
+      love_answered_map: {}, // ← 追加：回答済み管理
+    })
 
     // 「開始」ボタン
     await safeReply(event.replyToken, {
@@ -447,69 +432,65 @@ export async function handleLove(event) {
     return
   }
 
-  // Q（回答解釈→開始チェックの順）
+  // Q（ID一致 + 未回答のみ採用）
   if (s?.love_step === 'Q') {
     const idx = s.love_idx ?? 0
+    const currentQ = QUESTIONS[idx]
+    if (!currentQ) { await sendNextLoveQuestion(event, s); return }
 
-    // 回答の解釈（〇囲み/全角数字も拾う）
-    let pick = t
-    const circled = { '①':'1','②':'2','③':'3','④':'4','１':'1','２':'2','３':'3','４':'4' }
-    if (circled[pick]) pick = circled[pick]
-    if (!/^[1-4]$/.test(pick)) {
-      const refQ = idx === 0 ? QUESTIONS[0] : (QUESTIONS[idx - 1] || QUESTIONS[idx])
-      const pos = refQ?.choices?.findIndex((c) => cleanForUser(c) === t || c === t)
-      if (pos >= 0) pick = String(pos + 1)
+    const answeredMap = s.love_answered_map || {}
+
+    // 新形式: "Q{ID}-{n}"
+    let pick = null, qid = null
+    const m = /^Q(\d+)[-: ]?([1-4])$/.exec(t)
+    if (m) {
+      qid = Number(m[1])
+      pick = m[2]
+    } else {
+      // 後方互換（"1"〜"4" や 選択肢本文）
+      const circled = { '①':'1','②':'2','③':'3','④':'4','１':'1','２':'2','３':'3','４':'4' }
+      let cand = t
+      if (circled[cand]) cand = circled[cand]
+      if (/^[1-4]$/.test(cand)) pick = cand
+      else {
+        const pos = currentQ.choices?.findIndex(c => {
+          const label = cleanForUser(c)
+          return label === t || c === t
+        })
+        if (pos >= 0) pick = String(pos + 1)
+      }
+      qid = currentQ.id
     }
 
-    if (/^[1-4]$/.test(pick)) {
-      const answers = [...(s.love_answers || []), pick]
-      const nextIdx = idx + 1
-      await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
+    // 表示中のIDと一致 ＆ 未回答？
+    if (qid !== currentQ.id || !/^[1-4]$/.test(pick)) return
+    if (answeredMap[String(qid)]) return // 二度押し・重複は無視
 
-      // ▼ 保険：次の設問が存在しなければ最終承諾へ
-      if (!QUESTIONS[nextIdx]) {
-        await setSession(userId, { love_step: 'CONFIRM_PAY' })
-        await safeReply(
-          event.replyToken,
-          '🧾 最終確認\n' +
-          'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-          '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
-        )
-        await push(userId, buildFinalConfirmFlex())
-        return
-      }
+    // 採用
+    const answers = [...(s.love_answers || []), pick]
+    const nextIdx = idx + 1
+    const nextMap = { ...answeredMap, [String(qid)]: true }
 
-      await sendNextLoveQuestion(event, { ...s, love_answers: answers, love_idx: nextIdx })
+    await setSession(userId, {
+      love_step: 'Q',
+      love_answers: answers,
+      love_idx: nextIdx,
+      love_answered_map: nextMap,
+    })
+
+    if (!QUESTIONS[nextIdx]) {
+      await setSession(userId, { love_step: 'CONFIRM_PAY' })
+      await safeReply(
+        event.replyToken,
+        '🧾 最終確認\n' +
+        'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+        '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+      )
+      await push(userId, buildFinalConfirmFlex())
       return
     }
 
-    // 回答じゃない → 最初だけ開始必須
-    if (idx === 0) {
-      if (tn === '開始') {
-        await sendNextLoveQuestion(event, s)
-        return
-      }
-      await safeReply(event.replyToken, {
-        type: 'flex',
-        altText: '準備OKなら開始を押してね',
-        contents: {
-          type: 'bubble',
-          body: {
-            type: 'box',
-            layout: 'vertical',
-            spacing: 'md',
-            contents: [
-              { type: 'text', text: '準備OKなら「開始」を押してね✨' },
-              { type: 'button', style: 'primary', action: { type: 'message', label: '開始', text: '開始' } },
-            ],
-          },
-        },
-      })
-      return
-    }
-
-    // それ以外は現在のQを再掲
-    await sendNextLoveQuestion(event, s)
+    await sendNextLoveQuestion(event, { ...s, love_answers: answers, love_idx: nextIdx })
     return
   }
 
@@ -535,7 +516,7 @@ export async function handleLove(event) {
     return
   }
 
-  // 未初期化 → ご案内
+  // 未初期化
   await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
   await sendLove40Intro(event)
 }
