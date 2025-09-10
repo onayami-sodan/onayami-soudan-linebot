@@ -1,11 +1,13 @@
 /*
  =========================
-   love.mjs（完全版フル）
+   love.mjs（完全版フル｜支払い方法＋最終承諾フロー込み）
    - 案内：長文はテキストで全文表示 + 横並びの大きい色付きボタン（Flex）
    - 設問：縦並びの大きいボタン（Flex）
    - 回答テキストをそのまま送信（reply→push 切替で安定）
    - 開始ループ修正
-   - セッション保存は部分更新
+   - 設問完了後：診断書作成は3,980円（税込）を明記して最終承諾
+   - 承諾押下で「ありがとう！…48時間以内…」定型文を送信
+   - セッション保存は部分更新（upsert）
  =========================
 */
 
@@ -17,7 +19,7 @@ import { messagingApi } from '@line/bot-sdk'
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
 
-// ====== 案内文（全文） ======
+// ====== 案内文（全文｜支払い方法入り） ======
 const LOVE_INTRO_TEXT = [
   '💘 恋愛診断書（40問）ご案内',
   '',
@@ -33,9 +35,15 @@ const LOVE_INTRO_TEXT = [
   '所要時間：5〜8分（途中離脱OK）',
   '',
   '📄 お届け内容：総合タイプ判定、強み/つまずき、今すぐの一歩、相手タイプ別の距離の縮め方、セルフケア',
-  '💳 料金：フル 2,980円 / ライト 1,500円（学割あり）',
+  '💳 料金：通常9,800円(税込み）が✨今だけ 3,980円（税込み）✨',
   '⏱ 目安：48時間以内',
   '🔐 プライバシー：診断以外の目的では利用しません',
+  '',
+  '💳 お支払い方法',
+  '・PayPay',
+  '・クレジットカード（Visa / Master / JCB / AMEX など）',
+  '・携帯キャリア決済（SoftBank / au / docomo）',
+  '・PayPal',
   '',
   '✅ 進める場合は「承諾」を押してね（キャンセル可）',
 ]
@@ -149,6 +157,51 @@ function buildQuestionFlex(q) {
   }
 }
 
+// 最終承諾：横並びボタン（承諾 / トークTOP）
+function buildFinalConfirmFlex() {
+  return {
+    type: 'flex',
+    altText: '診断書作成の最終確認',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: '診断書の作成には 3,980円（税込）が必要です。', wrap: true, weight: 'bold' },
+          { type: 'text', text: '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね', wrap: true, size: 'sm' },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            spacing: 'md',
+            margin: 'lg',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#4CAF50',
+                height: 'md',
+                action: { type: 'message', label: '承諾', text: '承諾' },
+              },
+              {
+                type: 'button',
+                style: 'secondary',
+                color: '#FF4081',
+                height: 'md',
+                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
+              },
+            ],
+          },
+        ],
+      },
+      styles: { body: { backgroundColor: '#FFF9FB' } },
+    },
+  }
+}
+
 /* =========================
    公開: 案内文表示（ここで初期化）
    ========================= */
@@ -168,8 +221,16 @@ export async function sendLove40Intro(event) {
 async function sendNextLoveQuestion(event, session) {
   const idx = session.love_idx ?? 0
   if (idx >= QUESTIONS.length) {
-    await sendAnswersAsTextAndNotice(event, session)
-    await setSession(event.source?.userId, { flow: 'idle', love_step: 'DONE' })
+    // 設問が終わったら、まず最終承諾へ誘導
+    const userId = event.source?.userId
+    await setSession(userId, { love_step: 'CONFIRM_PAY' })
+    await safeReply(
+      event.replyToken,
+      '🧾 最終確認\n' +
+        'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+        '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+    )
+    await push(userId, buildFinalConfirmFlex())
     return true
   }
   const q = QUESTIONS[idx]
@@ -190,7 +251,7 @@ async function sendAnswersAsTextAndNotice(event, session) {
   lines.push('=== 恋愛診断 回答控え ===')
   lines.push(`LINEニックネーム: ${nickname || '(取得できませんでした)'}`)
   lines.push(`性別: ${profile.gender || '(未設定)'}`)
-  lines.push(`年齢: ${profile.age || '(未設定)'}`)
+  lines.push(`年代: ${profile.age || '(未設定)'}`)
   lines.push(`回答数: ${answers.length}`)
   lines.push('')
 
@@ -209,11 +270,11 @@ async function sendAnswersAsTextAndNotice(event, session) {
   // reply→push で確実に送信
   await replyThenPush(userId, event.replyToken, txt)
 
-  // 案内は push
+  // 48h案内（指定文言）
   await push(
     userId,
-    '💌 ありがとう！回答を受け取ったよ。\n' +
-      '48時間以内に「恋愛診断書」のURLをLINEでお届けするね。\n' +
+    '💌 ありがとう！回答を受け取ったよ\n' +
+      '48時間以内に「恋愛診断書」のURLをLINEでお届けするね\n' +
       '順番に作成しているので、もうちょっと待っててね💛'
   )
 }
@@ -274,7 +335,6 @@ export async function handleLove(event) {
       return
     }
     if (tn === 'キャンセル') {
-      // 入力しないのと同義だが、互換のため残す（idleへ）
       await setSession(userId, { flow: 'idle', love_step: null, love_idx: null })
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
@@ -452,6 +512,30 @@ export async function handleLove(event) {
 
     // それ以外は現在のQを再掲
     await sendNextLoveQuestion(event, s)
+    return
+  }
+
+  // 最終承諾フロー
+  if (s?.love_step === 'CONFIRM_PAY') {
+    if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
+      // 回答控え＋48h案内 → DONE
+      await sendAnswersAsTextAndNotice(event, s)
+      await setSession(userId, { flow: 'idle', love_step: 'DONE' })
+      return
+    }
+    if (tn === 'トークTOP') {
+      await setSession(userId, { flow: 'idle', love_step: null, love_idx: null })
+      await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
+      return
+    }
+    // 迷い入力 → 再度最終確認を掲示
+    await safeReply(
+      event.replyToken,
+      '🧾 最終確認\n' +
+        'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+        '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+    )
+    await push(userId, buildFinalConfirmFlex())
     return
   }
 
