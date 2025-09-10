@@ -317,16 +317,16 @@ async function handleRichMenuText(event, userId) {
    ステップ：PRICE → GENDER → AGE_GROUP → HAND → GUIDE → WAIT_IMAGE
    ========================= */
 async function sendPalmistryIntro(event) {
-await replyWithChoices(
-  event.replyToken,
-  PALM_INTRO_TEXT,
-  [
-    { label: '承諾', text: '承諾' },
-    { label: 'キャンセル', text: 'キャンセル' },
-    { label: '💌 はじめの画面へ', text: 'トークTOP' }, // ★ 追加
-  ]
-)
-
+  await replyWithChoices(
+    event.replyToken,
+    PALM_INTRO_TEXT,
+    [
+      { label: '承諾', text: '承諾' },
+      { label: 'キャンセル', text: 'キャンセル' },
+      { label: '💌 はじめの画面へ', text: 'トークTOP' }, // 追加
+    ]
+  );
+} // ← これが欠けてた！
 
 async function handlePalmistryFlow(event, session) {
   const msgType = event.message?.type
@@ -349,34 +349,34 @@ async function handlePalmistryFlow(event, session) {
   if (!(event.type === 'message' && msgType === 'text')) return false
   const t = (event.message.text || '').trim().normalize('NFKC')
 
-  // PRICE
-  if (session.palm_step === 'PRICE') {
-    if (t === '承諾') {
-      await setUserFlow(session.user_id, 'palm', { palm_step: 'GENDER' })
-      await replyWithChoices(event.replyToken, '性別を教えてね', [
-        { label: '男性', text: '男性' },
-        { label: '女性', text: '女性' },
-        { label: 'その他', text: 'その他' },
-      ])
-      return true
-    }
-    if (t === 'キャンセル') {
-      await setUserFlow(session.user_id, 'idle', { palm_step: null })
-      await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
-      return true
-    }
-    await replyWithChoices(
-  event.replyToken,
-  LOVE_INTRO_TEXT,
-  [
-    { label: '承諾', text: '承諾' },
-    { label: 'キャンセル', text: 'キャンセル' },
-    { label: '💌 はじめの画面へ', text: 'トークTOP' }, // ★ 追加
-  ]
-)
-
-    return true
+// PRICE
+if (session.palm_step === 'PRICE') {
+  if (t === '承諾') {
+    await setUserFlow(session.user_id, 'palm', { palm_step: 'GENDER' });
+    await replyWithChoices(event.replyToken, '性別を教えてね', [
+      { label: '男性', text: '男性' },
+      { label: '女性', text: '女性' },
+      { label: 'その他', text: 'その他' },
+    ]);
+    return true;
   }
+  if (t === 'キャンセル') {
+    await setUserFlow(session.user_id, 'idle', { palm_step: null });
+    await safeReply(event.replyToken, 'またいつでもどうぞ🌿');
+    return true;
+  }
+  // ← 誤: LOVE_INTRO_TEXT を使っていた
+  await replyWithChoices(
+    event.replyToken,
+    '進める場合は「承諾」を押してね🌸',
+    [
+      { label: '承諾', text: '承諾' },
+      { label: 'キャンセル', text: 'キャンセル' },
+      { label: '💌 はじめの画面へ', text: 'トークTOP' }, // 追加
+    ]
+  );
+  return true;
+}
 
   // GENDER
   if (session.palm_step === 'GENDER') {
@@ -470,9 +470,11 @@ async function sendLove40Intro(event) {
     [
       { label: '承諾', text: '承諾' },
       { label: 'キャンセル', text: 'キャンセル' },
+      { label: '💌 はじめの画面へ', text: 'トークTOP' }, // 追加
     ]
-  )
+  );
 }
+
 
 // 次の設問（4択ボタン）を出す
 async function sendNextLoveQuestion(event, session) {
