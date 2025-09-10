@@ -1,11 +1,17 @@
+/*
+ =========================
+  package.json（本番運用｜helmet・rate-limit 追加）
+ =========================
+*/
 {
   "name": "love-diagnosis-bot",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "main": "server.mjs",
   "scripts": {
     "dev": "node server.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "build": "echo \"no build\""
   },
   "engines": {
     "node": "20.x"
@@ -16,8 +22,9 @@
     "dayjs": "^1.11.11",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
     "openai": "^4.60.0",
     "uuid": "^9.0.1"
   }
 }
-
