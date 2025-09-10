@@ -1,8 +1,3 @@
-/*
- =========================
-  package.json（本番運用｜helmet・rate-limit 追加）
- =========================
-*/
 {
   "name": "love-diagnosis-bot",
   "version": "2.0.1",
