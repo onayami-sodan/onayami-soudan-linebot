@@ -11,11 +11,13 @@ import rateLimit from 'express-rate-limit'
 import { dispatchEvent } from './dispatcher.mjs'
 import { supabase } from './supabaseClient.js'
 
-// ===== 環境変数 =====
-const CHANNEL_SECRET = process.env.CHANNEL_SECRET
-const PORT = process.env.PORT || 3000
+// ===== 環境変数（キー名の揺れに両対応） =====
+const CHANNEL_SECRET =
+  process.env.CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET
+const PORT = Number(process.env.PORT || 3000)
+
 if (!CHANNEL_SECRET) {
-  console.error('[FATAL] CHANNEL_SECRET が未設定です。環境変数を確認してください。')
+  console.error('[FATAL] CHANNEL_SECRET が未設定です。Environment を確認してください。')
   process.exit(1)
 }
 
@@ -28,7 +30,7 @@ app.set('trust proxy', 1)
 app.use(
   express.json({
     verify: (req, _res, buf) => {
-      req.rawBody = buf
+      req.rawBody = buf // Buffer のまま保存
     },
   })
 )
@@ -36,18 +38,18 @@ app.use(
 // セキュリティヘッダ（必要最低限）
 app.use(
   helmet({
-    // ここではデフォルト設定でOK（CSP等を細かく調整したい場合はここで追加）
+    // 追加の制約が必要になったらここに追記（例：contentSecurityPolicy 等）
   })
 )
 
-// 簡易レート制限（IP単位）
+// 簡易レート制限（/health は除外）
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
     max: 120,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path === '/health', // ヘルスチェックは除外
+    skip: (req) => req.path === '/health',
   })
 )
 
@@ -72,7 +74,6 @@ function verifyLineSignature(req, res, next) {
 }
 
 // ===== 冪等化（Supabase） =====
-// 期待テーブル：
 // create table if not exists webhook_events (
 //   event_id text primary key,
 //   created_at timestamptz default now()
@@ -83,14 +84,14 @@ async function isDuplicateEvent(eventId) {
   if (error && error.code === '23505') return true // 一意制約違反＝重複
   if (error) {
     console.error('[IDEMPOTENCY ERROR]', error)
-    return false // 安全側で“非重複”扱い
+    return false // エラー時は処理続行（安全側）
   }
   return false
 }
 
 // ===== Webhook =====
 app.post('/webhook', verifyLineSignature, async (req, res) => {
-  // 1) 200速返し（LINEにOKを即返却）
+  // 1) 200速返し
   res.sendStatus(200)
 
   const events = Array.isArray(req.body?.events) ? req.body.events : []
@@ -114,7 +115,7 @@ app.post('/webhook', verifyLineSignature, async (req, res) => {
   )
 })
 
-// ===== ヘルスチェック =====
+// ===== ヘルスチェック & ルート =====
 app.get('/health', async (_req, res) => {
   try {
     const { error } = await supabase.from('webhook_events').select('event_id').limit(1)
@@ -131,12 +132,23 @@ app.get('/health', async (_req, res) => {
   }
 })
 
+app.get('/', (_req, res) => res.status(200).send('ok'))
+
 // ===== フォールバック（未捕捉エラー） =====
 app.use((err, _req, res, _next) => {
   console.error('[UNCAUGHT ERROR]', err)
   res.status(500).send('Internal Server Error')
 })
 
-app.listen(PORT, () => {
+// ===== 起動 & Graceful shutdown =====
+const server = app.listen(PORT, () => {
   console.log(`[BOOT] listening on :${PORT}`)
 })
+
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    console.log(`[SHUTDOWN] ${sig} received`)
+    server.close(() => process.exit(0))
+    setTimeout(() => process.exit(0), 5000)
+  })
+}
