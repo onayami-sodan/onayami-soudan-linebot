@@ -318,7 +318,7 @@ export async function handleLove(event) {
             paddingAll: '20px',
             contents: [
               { type: 'text', text: '性別を選んでね', weight: 'bold', size: 'md' },
-              ...['女性', '男性', 'その他'].map((label) => ([
+              ...['男性', '女性', 'その他'].map((label) => ([
                 {
                   type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
                   action: { type: 'message', label, text: label },
@@ -347,7 +347,7 @@ export async function handleLove(event) {
 
   // PROFILE_GENDER
   if (s?.love_step === 'PROFILE_GENDER') {
-    const ok = ['女性', '男性', 'その他'].includes(tn)
+    const ok = ['男性', '女性', 'その他'].includes(tn)
     if (!ok) {
       await safeReply(event.replyToken, {
         type: 'flex',
@@ -358,7 +358,7 @@ export async function handleLove(event) {
             type: 'box',
             layout: 'vertical',
             spacing: 'md',
-            contents: ['女性', '男性', 'その他'].map((label) => ({
+            contents: ['男性', '女性', 'その他'].map((label) => ({
               type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
               action: { type: 'message', label, text: label },
             })),
