@@ -1,12 +1,17 @@
+/*
+ =========================
+  dispatcher.mjs（本番運用向け｜メニュー即切替＋同義語対応＋flow永続化）
+ =========================
+*/
 import { supabase } from './supabaseClient.js'
 import { safeReply } from './lineClient.js'
 import { handleAI, sendAiIntro } from './ai.mjs'
 import { handlePalm, sendPalmistryIntro } from './palm.mjs'
 import { handleLove, sendLove40Intro } from './love.mjs'
 
-const SESSION_TABLE = 'user_sessions' // flow列: idle / ai / palm / love40
+const SESSION_TABLE = 'user_sessions' // flow: idle / ai / palm / love40
 
-// 🌸 トップの案内（保存版｜1メッセージに収まる形）
+// 🌸 トップ案内（1メッセージに収まる形）
 const ENTRY_TEXT = [
   '🌸 ご利用ありがとうございます 🌸',
   '',
@@ -20,7 +25,7 @@ const ENTRY_TEXT = [
   '下のリッチメニューからお好きなサービスを選んでください💛',
 ].join('\n')
 
-// リッチメニュー（厳密一致のベース）
+// リッチメニュー（厳密一致）
 const MENU_MAP = new Map([
   ['AI相談員ちゃん', 'ai'],
   ['手相占い診断',   'palm'],
@@ -42,67 +47,72 @@ const ALIAS = new Map([
 ])
 
 export async function dispatchEvent(event) {
-  // 画像・スタンプなど非テキスト → 現在フローに委譲
-  if (event.type === 'message' && event.message?.type !== 'text') {
-    const flow = await getFlow(event.source?.userId)
-    if (flow === 'palm') return handlePalm(event) // 手相は画像受付あり
-    // それ以外は軽く案内
-    await safeReply(event.replyToken, '文字で送ってくれたら、もっと具体的にお手伝いできるよ🌸')
-    return
-  }
+  try {
+    // 非テキストは palm フローのみ許可
+    if (event.type === 'message' && event.message?.type !== 'text') {
+      const flow = await getFlow(event.source?.userId)
+      if (flow === 'palm') return handlePalm(event)
+      await safeReply(event.replyToken, '文字で送ってくれたら、もっと具体的にお手伝いできるよ🌸')
+      return
+    }
 
-  // テキスト以外はここで終了
-  if (!(event.type === 'message' && event.message?.type === 'text')) return
+    // テキスト以外は無視
+    if (!(event.type === 'message' && event.message?.type === 'text')) return
 
-  const userId = event.source?.userId
-  const rawText = (event.message.text || '').trim().normalize('NFKC')
-  const normalized = rawText.replace(/\s+/g, '')
+    const userId = event.source?.userId
+    const rawText = (event.message.text || '').trim().normalize('NFKC')
+    const normalized = rawText.replace(/\s+/g, '')
 
-  // リッチメニュー厳密一致 or 同義語
-  const picked =
-    MENU_MAP.get(rawText) ||
-    MENU_MAP.get(normalized) ||
-    ALIAS.get(rawText) ||
-    ALIAS.get(normalized)
+    // メニュー厳密一致 or 同義語
+    const picked =
+      MENU_MAP.get(rawText) ||
+      MENU_MAP.get(normalized) ||
+      ALIAS.get(rawText) ||
+      ALIAS.get(normalized)
 
-  // トップに戻す指示
-  if (picked === 'top') {
+    // top 指示なら即復帰
+    if (picked === 'top') {
+      await setFlow(userId, 'idle')
+      await safeReply(event.replyToken, ENTRY_TEXT)
+      return
+    }
+
+    // メニューからの即切替
+    if (picked === 'ai') {
+      await setFlow(userId, 'ai')
+      await sendAiIntro(event)
+      return
+    }
+    if (picked === 'palm') {
+      await setFlow(userId, 'palm', { palm_step: 'PRICE' })
+      await sendPalmistryIntro(event)
+      return
+    }
+    if (picked === 'love40') {
+      await setFlow(userId, 'love40', { love_step: 'PRICE' })
+      await sendLove40Intro(event)
+      return
+    }
+
+    // 現在のフローで処理
+    const flow = await getFlow(userId)
+
+    if (flow === 'idle') {
+      await safeReply(event.replyToken, ENTRY_TEXT)
+      return
+    }
+    if (flow === 'ai')   return handleAI(event)
+    if (flow === 'palm') return handlePalm(event)
+    if (flow === 'love40') return handleLove(event)
+
+    // 不明な状態は idle に戻す
     await setFlow(userId, 'idle')
     await safeReply(event.replyToken, ENTRY_TEXT)
-    return
+  } catch (err) {
+    console.error('[DISPATCH ERROR]', err, { event })
+    // 返信に失敗してもプロセスは落とさない
+    try { if (event?.replyToken) await safeReply(event.replyToken, 'ごめんね 今うまく受け取れなかったみたい また送ってね🌷') } catch {}
   }
-
-  // メニューでの即切替（ユーザー操作最優先）
-  if (picked === 'ai') {
-    await setFlow(userId, 'ai')
-    await sendAiIntro(event)              // AIの案内文を即表示
-    return
-  }
-  if (picked === 'palm') {
-    await setFlow(userId, 'palm', { palm_step: 'PRICE' })
-    await sendPalmistryIntro(event)       // 手相の案内文を即表示
-    return
-  }
-  if (picked === 'love40') {
-    await setFlow(userId, 'love40', { love_step: 'PRICE' })
-    await sendLove40Intro(event)          // 恋愛の案内文を即表示
-    return
-  }
-
-  // 現在のフローで分岐
-  const flow = await getFlow(userId)
-
-  if (flow === 'idle') {
-    await safeReply(event.replyToken, ENTRY_TEXT)
-    return
-  }
-  if (flow === 'ai')   return handleAI(event)
-  if (flow === 'palm') return handlePalm(event)
-  if (flow === 'love40') return handleLove(event)
-
-  // 未設定はトップへ
-  await setFlow(userId, 'idle')
-  await safeReply(event.replyToken, ENTRY_TEXT)
 }
 
 /* =========================
@@ -110,13 +120,28 @@ export async function dispatchEvent(event) {
    ========================= */
 async function getFlow(userId) {
   if (!userId) return 'idle'
-  const { data } = await supabase
-    .from(SESSION_TABLE).select('flow').eq('user_id', userId).maybeSingle()
+  const { data, error } = await supabase
+    .from(SESSION_TABLE)
+    .select('flow')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) {
+    console.error('[getFlow ERROR]', error)
+    return 'idle'
+  }
   return data?.flow || 'idle'
 }
+
 async function setFlow(userId, flow, extra = {}) {
   if (!userId) return
-  const payload = { user_id: userId, flow, ...extra, updated_at: new Date().toISOString() }
-  await supabase.from(SESSION_TABLE).upsert(payload, { onConflict: 'user_id' })
+  const payload = {
+    user_id: userId,
+    flow,
+    ...extra,
+    updated_at: new Date().toISOString(),
+  }
+  const { error } = await supabase
+    .from(SESSION_TABLE)
+    .upsert(payload, { onConflict: 'user_id' })
+  if (error) console.error('[setFlow ERROR]', error, { payload })
 }
-
