@@ -574,20 +574,20 @@ async function handleLove40Flow(event, session) {
    AI相談（通常会話）本体
    ========================= */
 async function handleAiChat(event, session) {
-  if (!(event.type === 'message' && event.message?.type === 'text')) return false
+  if (!(event.type === 'message' && event.message?.type === 'text')) return false;
 
-  const userId = session.user_id
-  const userText = (event.message.text || '').trim()
-  const today = getJapanDateString()
-  const todayNote = getTodayNoteStable()
+  const userId = session.user_id;
+  const userText = (event.message.text || '').trim();
+  const today = getJapanDateString();
+  const todayNote = getTodayNoteStable();
 
   // 管理者モード（合言葉）
   if (userText === ADMIN_SECRET) {
     await safeReply(
       event.replyToken,
       `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」\nURL：${todayNote.url}`
-    )
-    return true
+    );
+    return true;
   }
 
   // 電話相談の問い合わせ
@@ -595,7 +595,7 @@ async function handleAiChat(event, session) {
     const base =
       '電話でもお話しできるよ📞\n' +
       'リッチメニューの「予約」からかんたんに予約してね\n' +
-      'お電話はAIじゃなくて人の相談員がやさしく寄りそうよ🌸'
+      'お電話はAIじゃなくて人の相談員がやさしく寄りそうよ🌸';
     if (RESERVE_URL) {
       await safeReply(event.replyToken, {
         type: 'text',
@@ -603,11 +603,11 @@ async function handleAiChat(event, session) {
         quickReply: {
           items: [{ type: 'action', action: { type: 'uri', label: '予約ページを開く', uri: RESERVE_URL } }],
         },
-      })
+      });
     } else {
-      await safeReply(event.replyToken, base)
+      await safeReply(event.replyToken, base);
     }
-    return true
+    return true;
   }
 
   // 合言葉（noteのパス）で当日解放
@@ -617,77 +617,77 @@ async function handleAiChat(event, session) {
       last_date: today,
       authenticated: true,
       auth_date: today,
-    }
-    await saveSession(newSession)
-    await safeReply(event.replyToken, '合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕')
-    return true
+    };
+    await saveSession(newSession);
+    await safeReply(event.replyToken, '合言葉が確認できたよ☺️\n今日はずっとお話しできるからね💕');
+    return true;
   }
 
   // 会話履歴と回数をロード
-  const sameDay = session.last_date === today
-  const recent = isRecent(session.updated_at)
-  let count = sameDay ? (session.count || 0) : 0
-  let messages = recent ? (session.messages || []) : []
-  let greeted = !!session.greeted
-  let authenticated = sameDay ? !!session.authenticated : false
-  let authDate = sameDay ? (session.auth_date || null) : null
+  const sameDay = session.last_date === today;
+  const recent = isRecent(session.updated_at);
+  let count = sameDay ? (session.count || 0) : 0;
+  let messages = recent ? (session.messages || []) : [];
+  let greeted = !!session.greeted;
+  let authenticated = sameDay ? !!session.authenticated : false;
+  let authDate = sameDay ? (session.auth_date || null) : null;
 
   // キャラプロンプト + 短文回答モード
-  const persona = await getCharacterPrompt(userId)
+  const persona = await getCharacterPrompt(userId);
   const needsShort =
-    /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/i.test(userText)
+    /どう思う|どうすれば|した方がいい|どうしたら|あり？|OK？|好き？|本気？/i.test(userText);
   const systemPrompt = needsShort
     ? `${persona}\n【ルール】以下を必ず守って答えて\n・結論を最初に出す（YES / NO / やめた方がいい など）\n・最大3行まで\n・回りくどい共感・曖昧表現は禁止\n・一度で終わる返答を意識`
-    : persona
+    : persona;
 
   // 初回 system を挿入
   if (messages.length === 0 && !greeted) {
-    messages.push({ role: 'system', content: systemPrompt })
-    greeted = true
+    messages.push({ role: 'system', content: systemPrompt });
+    greeted = true;
   }
 
-  let replyText = ''
-  const newCount = (count || 0) + 1
+  let replyText = '';
+  const newCount = (count || 0) + 1;
 
   try {
     if (!authenticated) {
       if (newCount <= 3) {
-        messages.push({ role: 'user', content: userText })
-        messages = capHistory(messages)
-        const result = await aiChat(messages)
-        replyText = result.text
-        if (result.ok) messages.push({ role: 'assistant', content: result.text })
+        messages.push({ role: 'user', content: userText });
+        messages = capHistory(messages);
+        const result = await aiChat(messages);
+        replyText = result.text;
+        if (result.ok) messages.push({ role: 'assistant', content: result.text });
       } else if (newCount === 4) {
         messages.push({
           role: 'user',
           content:
             `※この返信は100トークン以内で完結させてください。話の途中で終わらず、1〜2文でわかりやすくまとめてください\n\n${userText}`,
-        })
-        messages = capHistory(messages)
-        const result = await aiChat(messages)
+        });
+        messages = capHistory(messages);
+        const result = await aiChat(messages);
         if (result.ok) {
-          messages.push({ role: 'assistant', content: result.text })
+          messages.push({ role: 'assistant', content: result.text });
           replyText =
             `${result.text}\n\n明日になれば、またお話しできるよ🥰\n` +
-            `🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url} 🔑`
+            `🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url} 🔑`;
         } else {
-          replyText = result.text
+          replyText = result.text;
         }
       } else {
         replyText =
           `たくさんお話してくれてありがとうね☺️\n明日になれば、またお話しできるよ🥰\n` +
-          `🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url}`
+          `🌸 続けて話したい方はこちらから合言葉を入手してね☺️\n👉 ${todayNote.url}`;
       }
     } else {
-      messages.push({ role: 'user', content: userText })
-      messages = capHistory(messages)
-      const result = await aiChat(messages)
-      replyText = result.text
-      if (result.ok) messages.push({ role: 'assistant', content: result.text })
+      messages.push({ role: 'user', content: userText });
+      messages = capHistory(messages);
+      const result = await aiChat(messages);
+      replyText = result.text;
+      if (result.ok) messages.push({ role: 'assistant', content: result.text });
     }
   } catch (e) {
-    console.error('[AI-CHAT ERROR]', e)
-    replyText = 'いま少し混み合ってるみたい…もう一度だけ送ってみてね🙏'
+    console.error('[AI-CHAT ERROR]', e);
+    replyText = 'いま少し混み合ってるみたい…もう一度だけ送ってみてね🙏';
   }
 
   // セッション保存
@@ -700,51 +700,51 @@ async function handleAiChat(event, session) {
     greeted,
     authenticated,
     auth_date: authDate,
-  }
+  };
   try {
-    await saveSession(toSave)
+    await saveSession(toSave);
   } catch (e) {
-    console.error('[SESSION SAVE ERROR]', e)
+    console.error('[SESSION SAVE ERROR]', e);
   }
 
-  await safeReply(event.replyToken, replyText)
-  return true
-}
+  await safeReply(event.replyToken, replyText);
+  return true;
+} // ← ここで **必ず関数を閉じる**！
 
 /* =========================
    エクスポート（イベント1件を処理）
    ========================= */
-export async function handleAI(event) {
-  if (!event) return
+async function handleAI(event) {
+  if (!event) return;
 
-  const userId = event.source?.userId
-  if (!userId) return
+  const userId = event.source?.userId;
+  if (!userId) return;
 
   // 1) リッチメニュー（同義語含む）を最優先で判定
-  const handledMenu = await handleRichMenuText(event, userId)
-  if (handledMenu) return
+  const handledMenu = await handleRichMenuText(event, userId);
+  if (handledMenu) return;
 
   // 2) 進行中フローに応じて処理
-  const session = (await loadSession(userId)) || { user_id: userId, flow: 'idle' }
-  const flow = session.flow || 'idle'
+  const session = (await loadSession(userId)) || { user_id: userId, flow: 'idle' };
+  const flow = session.flow || 'idle';
 
-  // 手相フロー（画像／テキスト両方に対応）
+  // 手相フロー
   if (flow === 'palm') {
-    const done = await handlePalmistryFlow(event, session)
-    if (done) return
+    const done = await handlePalmistryFlow(event, session);
+    if (done) return;
   }
 
   // 恋愛40問フロー
   if (flow === 'love40') {
-    const done = await handleLove40Flow(event, session)
-    if (done) return
+    const done = await handleLove40Flow(event, session);
+    if (done) return;
   }
 
   // AI相談（idle または ai の時は通常会話）
   if (event.type === 'message' && event.message?.type === 'text') {
-    await setUserFlow(userId, 'ai') // idle の場合は ai として扱う
-    await handleAiChat(event, { ...(session || {}), user_id: userId })
-    return
+    await setUserFlow(userId, 'ai'); // idle の場合は ai として扱う
+    await handleAiChat(event, { ...(session || {}), user_id: userId });
+    return;
   }
 
   // 未対応イベント（画像・スタンプ等）→軽いガイド
@@ -752,8 +752,9 @@ export async function handleAI(event) {
     await safeReply(
       event.replyToken,
       'ありがとう！文字で送ってくれたら、もっと具体的にお手伝いできるよ🌸'
-    )
+    );
   }
 }
 
-export default handleAI
+export { handleAI };       // named export
+export default handleAI;   // default export（どちらでimportしてもOK）
