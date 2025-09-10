@@ -1,155 +1,158 @@
-/* =========================
-   server.mjs（💌 はじめの画面へ対応版｜TOPでflowをidleにリセット）
-   ========================= */
+// server.mjs — 本番運用向け（ESM）
+// - LINE署名検証（x-line-signature）
+// - raw body保持（検証用）
+// - 冪等化（eventIdで重複処理スキップ; Supabaseテーブル利用）
+// - 200速返し（処理は背後で実行）
+// - ヘルスチェック / セキュリティヘッダ / 最低限のレート制限
+
 import 'dotenv/config'
 import express from 'express'
-import { messagingApi } from '@line/bot-sdk'
-
-import { safeReply } from './lineClient.js'
-import { handleAI } from './aiRouter.mjs'
-import { isOpen, setOpen } from './featureFlags.js'
+import crypto from 'crypto'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
+import { dispatchEvent } from './dispatcher.mjs'
 import { supabase } from './supabaseClient.js'
-import { ENTRY_TEXT } from './texts.mjs'
 
-const app = express()
-app.use(express.json())
-
-// LINE SDK クライアント（署名検証は省略）
-new messagingApi.MessagingApiClient({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-})
-
-// 管理者
-const ADMIN_IDS = (process.env.ADMIN_USER_IDS || '')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean)
-
-// 管理対象サービスキー
-const SERVICES = ['ai', 'palm', 'renai']
-
-/** -------- ユーティリティ -------- **/
-function parseAdminCommand(text) {
-  const t = (text || '').trim()
-  // 日本語コマンド
-  if (/^(恋愛|れんあい)準備中$/.test(t)) return { app: 'renai', open: false }
-  if (/^(恋愛|れんあい)再開$/.test(t))   return { app: 'renai', open: true }
-  if (/^手相準備中$/.test(t))            return { app: 'palm',  open: false }
-  if (/^手相再開$/.test(t))              return { app: 'palm',  open: true }
-  if (/^(AI|ＡＩ)準備中$/.test(t))        return { app: 'ai',    open: false }
-  if (/^(AI|ＡＩ)再開$/.test(t))          return { app: 'ai',    open: true }
-  if (/^(状態|ステータス)$/.test(t))      return { status: true }
-
-  // スラッシュコマンド
-  if (t.startsWith('/')) {
-    const [cmdRaw, appRaw] = t.slice(1).split(/\s+/, 2)
-    const cmd = (cmdRaw || '').toLowerCase()
-    const app = (appRaw || '').toLowerCase()
-    if (cmd === 'status') return { status: true }
-    if ((cmd === 'open' || cmd === 'close') && SERVICES.includes(app)) {
-      return { app, open: cmd === 'open' }
-    }
-  }
-  return null
-}
-
-function whoami(event) {
-  return `your userId: ${event?.source?.userId || 'unknown'}`
-}
-
-/** -------- ルーティング -------- **/
-app.get('/ping', (_, res) => res.status(200).send('pong'))
-
-app.post('/webhook', async (req, res) => {
-  const events = req.body?.events || []
-  res.status(200).send('OK')
-  for (const e of events) {
-    await handleEventSafely(e)
-  }
-})
-
-/** -------- イベント処理 -------- **/
-async function handleEventSafely(event) {
-  try {
-    if (event.type === 'message' && event.message?.type === 'text') {
-      const text = (event.message.text || '').trim()
-      const uid = event.source?.userId
-      const isAdmin = ADMIN_IDS.includes(uid)
-
-      // /whoami は誰でも使える
-      if (text === '/whoami') {
-        return safeReply(event.replyToken, whoami(event))
-      }
-
-      // 💌 はじめの画面へ（トークTOP）→ flow=idle にして ENTRY_TEXT を返す
-      if (text === 'トークTOP') {
-        try {
-          const { data, error } = await supabase
-            .from('user_sessions')
-            .select('*')
-            .eq('user_id', uid)
-            .maybeSingle()
-          if (error) throw error
-
-          const row = data || { user_id: uid }
-          const { error: upErr } = await supabase.from('user_sessions').upsert({
-            ...row,
-            user_id: uid,
-            flow: 'idle',
-            palm_step: null,
-            love_step: null,
-            
-            // 必要に応じて完全初期化したい場合は以下をアンコメント
-            // count: 0,
-            // messages: [],
-            // greeted: false,
-            // authenticated: false,
-            // auth_date: null,
-            updated_at: new Date().toISOString(),
-          })
-          if (upErr) throw upErr
-        } catch (e) {
-          console.error('[RESET_TO_TOP ERROR]', e)
-        }
-        return safeReply(event.replyToken, ENTRY_TEXT)
-      }
-
-      // 管理者コマンド
-      const cmd = parseAdminCommand(text)
-      if (cmd) {
-        if (!isAdmin) {
-          return safeReply(event.replyToken, 'これは管理者コマンドです。権限がありません🙏')
-        }
-        if (cmd.status) {
-          const rows = await Promise.all(
-            SERVICES.map(async k => `- ${k}: ${(await isOpen(k)) ? 'OPEN' : '準備中'}`)
-          )
-          return safeReply(event.replyToken, `状態\n${rows.join('\n')}`)
-        }
-        if (cmd.app) {
-          await setOpen(cmd.app, cmd.open)
-          return safeReply(
-            event.replyToken,
-            cmd.open ? `✅ ${cmd.app} を OPEN にしました`
-                     : `⛔ ${cmd.app} を 準備中 にしました`
-          )
-        }
-      }
-    }
-
-    // 通常処理は aiRouter に委譲（★必ず await）
-    await handleAI(event)
-    return
-  } catch (err) {
-    console.error('[ERROR] handleEventSafely:', err)
-    if (event?.replyToken) {
-      try {
-        await safeReply(event.replyToken, 'エラーが発生しました。少し待って再試行してください🙏')
-      } catch {}
-    }
-  }
-}
-
-/** -------- 起動 -------- **/
+// ========= 環境変数 =========
+const CHANNEL_SECRET = process.env.CHANNEL_SECRET
 const PORT = process.env.PORT || 3000
-app.listen(PORT, () => console.log(`server.mjs listening on ${PORT}`))
+if (!CHANNEL_SECRET) {
+  console.error('[FATAL] CHANNEL_SECRET が未設定です。環境変数を確認してください。')
+  process.exit(1)
+}
+
+// ========= アプリ初期化 =========
+const app = express()
+
+// 署名検証で使う raw body を保持するための設定（JSONパース前）
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      // 生バイト列を保存しておく（署名検証に使用）
+      req.rawBody = buf
+    },
+  })
+)
+
+// セキュリティヘッダ
+app.use(
+  helmet({
+    // LINE側がUser-Agentや一部ヘッダを期待するが、helmetデフォルトで問題ない
+  })
+)
+
+// 簡易レート制限（IP単位／WebhookはLINE固定だが、念のため）
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: 120, // 1分120リクエスト（十分ゆるめ）
+    standardHeaders: true,
+    legacyHeaders: false,
+  })
+)
+
+// ========= 署名検証ミドルウェア =========
+function verifyLineSignature(req, res, next) {
+  try {
+    const signature = req.get('x-line-signature') || ''
+    const rawBody = req.rawBody
+    if (!rawBody || !signature) {
+      return res.status(400).send('Bad Request')
+    }
+    const computed = crypto
+      .createHmac('sha256', CHANNEL_SECRET)
+      .update(rawBody)
+      .digest('base64')
+    if (computed !== signature) {
+      return res.status(403).send('Invalid signature')
+    }
+    next()
+  } catch (e) {
+    console.error('[SIGNATURE VERIFY ERROR]', e)
+    return res.status(500).send('Internal Error')
+  }
+}
+
+// ========= 冪等化（Supabase） =========
+// テーブル例：
+// create table if not exists webhook_events (
+//   event_id text primary key,
+//   created_at timestamptz default now()
+// );
+async function isDuplicateEvent(eventId) {
+  if (!eventId) return false
+  const { error } = await supabase
+    .from('webhook_events')
+    .insert({ event_id: eventId })
+  // 一意制約違反なら duplicate とみなす
+  if (error && error.code === '23505') return true
+  if (error) {
+    console.error('[IDEMPOTENCY ERROR]', error)
+    // エラー時は安全側で duplicate 扱いにはしない
+    return false
+  }
+  return false
+}
+
+// ========= Webhook =========
+app.post('/webhook', verifyLineSignature, async (req, res) => {
+  // 1) 200を速返し
+  res.sendStatus(200)
+
+  const body = req.body || {}
+  const events = Array.isArray(body.events) ? body.events : []
+
+  // 2) 各イベントを非同期で処理（重かったら落ちないよう個別try/catch）
+  //    ※並列で良いが、外部API制限に応じて必要なら直列化など調整
+  await Promise.allSettled(
+    events.map(async (ev) => {
+      try {
+        // a) LINEの再送フラグを確認（参考）
+        const redelivery = ev?.deliveryContext?.redelivery === true
+
+        // b) 冪等化（eventIdで一度きり）
+        const eventId = ev?.message?.id || ev?.webhookEventId || ev?.eventId
+        const dup = await isDuplicateEvent(eventId)
+        if (dup || redelivery) {
+          // 重複は処理しない（ログのみ）
+          console.log('[SKIP DUPLICATE]', { eventId, redelivery })
+          return
+        }
+
+        // c) 実処理：dispatcherに委譲
+        await dispatchEvent(ev)
+      } catch (e) {
+        console.error('[EVENT ERROR]', e, { ev })
+      }
+    })
+  )
+})
+
+// ========= ヘルスチェック =========
+app.get('/health', async (_req, res) => {
+  try {
+    // DB疎通の軽い確認（不要なら削除可）
+    const { error } = await supabase.from('webhook_events').select('event_id').limit(1)
+    if (error) throw error
+    res.status(200).json({
+      ok: true,
+      service: 'line-webhook',
+      version: '1.0.0',
+      time: new Date().toISOString(),
+    })
+  } catch (e) {
+    console.error('[HEALTH ERROR]', e)
+    res.status(500).json({ ok: false, error: 'db_unreachable' })
+  }
+})
+
+// ========= エラーハンドラ（最後） =========
+app.use((err, _req, res, _next) => {
+  console.error('[UNCAUGHT ERROR]', err)
+  res.status(500).send('Internal Server Error')
+})
+
+// ========= 起動 =========
+app.listen(PORT, () => {
+  console.log(`[BOOT] listening on :${PORT}`)
+})
