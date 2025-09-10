@@ -1,9 +1,9 @@
-// love.mjs（回答テキスト化→送信→48時間案内まで実装）
+// love.mjs（回答テキスト化→送信→48時間案内まで実装・安定版）
 
 import { safeReply } from './lineClient.js'
 import { supabase } from './supabaseClient.js'
 import { QUESTIONS } from './questions.js'
-import { messagingApi } from '@line/bot-sdk' // ニックネーム取得用
+import { messagingApi } from '@line/bot-sdk'
 
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
@@ -31,7 +31,7 @@ const LOVE_INTRO_TEXT = [
   '✅ 進める場合は「承諾」を押してね（キャンセル可）',
 ].join('\n')
 
-// ====== Quick Reply 送信用ユーティリティ ======
+// ====== Quick Reply ======
 async function replyWithChoices(replyToken, text, choices = []) {
   return safeReply(replyToken, {
     type: 'text',
@@ -45,17 +45,15 @@ async function replyWithChoices(replyToken, text, choices = []) {
   })
 }
 
-// ====== 長文を分割して送る（LINEの文字数制限対策・概ね4,000字で分割） ======
+// ====== 長文分割送信 ======
 async function replyChunked(replyToken, bigText, chunkSize = 4000) {
   if (!bigText || typeof bigText !== 'string') return
   for (let i = 0; i < bigText.length; i += chunkSize) {
-    const part = bigText.slice(i, i + chunkSize)
-    // 連投しすぎ防止のため await で順次送信
-    await safeReply(replyToken, part)
+    await safeReply(replyToken, bigText.slice(i, i + chunkSize))
   }
 }
 
-// ====== LINEニックネーム取得 ======
+// ====== LINEニックネーム ======
 async function getLineDisplayName(userId) {
   try {
     if (!LINE_ACCESS_TOKEN || !userId) return ''
@@ -67,8 +65,10 @@ async function getLineDisplayName(userId) {
   }
 }
 
-// ====== 公開: 案内文表示 ======
+// ====== 公開: 案内文表示（ここで確実に初期化） ======
 export async function sendLove40Intro(event) {
+  const userId = event.source?.userId
+  if (userId) await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
   await replyWithChoices(event.replyToken, LOVE_INTRO_TEXT, [
     { label: '承諾', text: '承諾' },
     { label: 'キャンセル', text: 'キャンセル' },
@@ -80,13 +80,10 @@ export async function sendLove40Intro(event) {
 async function sendNextLoveQuestion(event, session) {
   const idx = session.love_idx ?? 0
   if (idx >= QUESTIONS.length) {
-    // ここで回答テキスト化→送信→案内
     await sendAnswersAsTextAndNotice(event, session)
-    // 完了処理
     await setSession(event.source?.userId, { flow: 'idle', love_step: 'DONE' })
     return true
   }
-
   const q = QUESTIONS[idx]
   await replyWithChoices(
     event.replyToken,
@@ -96,14 +93,13 @@ async function sendNextLoveQuestion(event, session) {
   return false
 }
 
-// ====== 40問の回答をテキスト化してLINEに送信 → 48時間案内 ======
+// ====== 回答控え送信＋48h案内 ======
 async function sendAnswersAsTextAndNotice(event, session) {
   const userId = event.source?.userId
   const nickname = await getLineDisplayName(userId)
-  const profile = session.love_profile || {} // { gender, age }
+  const profile = session.love_profile || {}
   const answers = session.love_answers || []
 
-  // 回答テキスト生成
   const lines = []
   lines.push('=== 恋愛診断 回答控え ===')
   lines.push(`LINEニックネーム: ${nickname || '(取得できませんでした)'}`)
@@ -114,7 +110,7 @@ async function sendAnswersAsTextAndNotice(event, session) {
 
   for (let i = 0; i < QUESTIONS.length; i++) {
     const q = QUESTIONS[i]
-    const a = answers[i] // '1' | '2' | '3' | '4'
+    const a = answers[i]
     const idx = a ? Number(a) - 1 : -1
     const choiceText = idx >= 0 ? q.choices[idx] : '(未回答)'
     lines.push(`Q${q.id}. ${q.text}`)
@@ -122,12 +118,7 @@ async function sendAnswersAsTextAndNotice(event, session) {
     lines.push('')
   }
 
-  const txt = lines.join('\n')
-
-  // 文字数制限対策で分割送信
-  await replyChunked(event.replyToken, txt)
-
-  // 48時間案内
+  await replyChunked(event.replyToken, lines.join('\n'))
   await safeReply(
     event.replyToken,
     '💌 ありがとう！回答を受け取ったよ。\n' +
@@ -136,30 +127,30 @@ async function sendAnswersAsTextAndNotice(event, session) {
   )
 }
 
-// ====== 恋愛フロー本体（プロフィール導入つき） ======
+// ====== 恋愛フロー本体 ======
 export async function handleLove(event) {
   if (!(event.type === 'message' && event.message?.type === 'text')) return
   const userId = event.source?.userId
   if (!userId) return
-  const t = (event.message.text || '').trim().normalize('NFKC')
+
+  const raw = (event.message.text || '').trim().normalize('NFKC')
+  const t = raw
+  const tn = raw.replace(/\s+/g, '') // スペース除去版（「開 始」「 1 」なども拾う）
+
   const s = await loadSession(userId)
 
-  // 料金案内 → 承諾/キャンセル
+  // PRICE
   if (s?.love_step === 'PRICE') {
-    if (t === '承諾') {
+    if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
       await setSession(userId, { love_step: 'PROFILE_GENDER', love_profile: {}, love_answers: [], love_idx: 0 })
-      await replyWithChoices(
-        event.replyToken,
-        'まずはプロフィールから進めるね。性別を教えてね',
-        [
-          { label: '女性', text: '女性' },
-          { label: '男性', text: '男性' },
-          { label: 'その他', text: 'その他' },
-        ]
-      )
+      await replyWithChoices(event.replyToken, 'まずはプロフィールから進めるね。性別を教えてね', [
+        { label: '女性', text: '女性' },
+        { label: '男性', text: '男性' },
+        { label: 'その他', text: 'その他' },
+      ])
       return
     }
-    if (t === 'キャンセル') {
+    if (tn === 'キャンセル') {
       await setSession(userId, { flow: 'idle', love_step: null, love_idx: null })
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
@@ -171,9 +162,9 @@ export async function handleLove(event) {
     return
   }
 
-  // プロフィール：性別
+  // PROFILE_GENDER
   if (s?.love_step === 'PROFILE_GENDER') {
-    const ok = ['女性', '男性', 'その他'].includes(t)
+    const ok = ['女性', '男性', 'その他'].includes(tn)
     if (!ok) {
       await replyWithChoices(event.replyToken, '性別を選んでね', [
         { label: '女性', text: '女性' },
@@ -197,7 +188,7 @@ export async function handleLove(event) {
     return
   }
 
-  // プロフィール：年代
+  // PROFILE_AGE
   if (s?.love_step === 'PROFILE_AGE') {
     const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
     if (!okAges.includes(t)) {
@@ -206,40 +197,37 @@ export async function handleLove(event) {
     }
     const profile = { ...(s.love_profile || {}), age: t }
     await setSession(userId, { love_step: 'Q', love_profile: profile, love_idx: 0, love_answers: [] })
-    await replyWithChoices(
-      event.replyToken,
-      'ありがとう🌸\nこのあと少しずつ質問するね。\n準備OKなら「開始」を押してね',
-      [{ label: '開始', text: '開始' }]
-    )
+    await replyWithChoices(event.replyToken, 'ありがとう🌸\nこのあと少しずつ質問するね。\n準備OKなら「開始」を押してね', [
+      { label: '開始', text: '開始' },
+    ])
     return
   }
 
-  // 設問出題・回答
+  // Q
   if (s?.love_step === 'Q') {
     const idx = s.love_idx ?? 0
 
-    // 最初だけ「開始」必須
-    if (idx === 0 && t !== '開始') {
-      await replyWithChoices(event.replyToken, '準備OKなら「開始」を押してね✨', [
-        { label: '開始', text: '開始' },
-      ])
+    // 最初だけ開始ボタン
+    if (idx === 0 && tn !== '開始') {
+      await replyWithChoices(event.replyToken, '準備OKなら「開始」を押してね✨', [{ label: '開始', text: '開始' }])
       return
     }
-    if (idx === 0 && t === '開始') {
-      await sendNextLoveQuestion(event, s)
+    if (idx === 0 && tn === '開始') {
+      await sendNextLoveQuestion(event, s) // Q1 を提示
       return
     }
 
-    // 回答：1〜4 または本文一致で拾う
+    // 回答の受理
     let pick = t
-    const numMap = { '①': '1', '②': '2', '③': '3', '④': '4' }
-    if (numMap[pick]) pick = numMap[pick]
+    const circled = { '①': '1', '②': '2', '③': '3', '④': '4' }
+    if (circled[pick]) pick = circled[pick]
     if (!/^[1-4]$/.test(pick)) {
       const prevQ = QUESTIONS[idx - 1] || QUESTIONS[idx]
       const pos = prevQ?.choices?.findIndex((c) => c === t)
       if (pos >= 0) pick = String(pos + 1)
     }
     if (!/^[1-4]$/.test(pick)) {
+      // 無効入力 → 次の質問を再掲（直前の or 現在の）
       await sendNextLoveQuestion(event, s)
       return
     }
@@ -251,19 +239,24 @@ export async function handleLove(event) {
     return
   }
 
-  // 未初期化ならご案内へ
-  await setSession(userId, { flow: 'love40', love_step: 'PRICE' })
+  // 未初期化 → ご案内
+  await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
   await sendLove40Intro(event)
 }
 
 // ====== セッション I/O ======
 async function loadSession(userId) {
   const { data } = await supabase.from(SESSION_TABLE).select('*').eq('user_id', userId).maybeSingle()
-  return data || { user_id: userId, flow: 'love40', love_step: 'PRICE' }
-}
-async function setSession(userId, patch) {
-  const row = await loadSession(userId)
-  const payload = { ...row, ...patch, updated_at: new Date().toISOString() }
-  await supabase.from(SESSION_TABLE).upsert(payload, { onConflict: 'user_id' })
+  return data || { user_id: userId, flow: 'love40', love_step: 'PRICE', love_idx: 0 }
 }
 
+// ★競合に強い「部分更新」版（読み出し→マージをやめる）
+async function setSession(userId, patch) {
+  if (!userId) return
+  await supabase
+    .from(SESSION_TABLE)
+    .upsert(
+      { user_id: userId, ...patch, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' }
+    )
+}
