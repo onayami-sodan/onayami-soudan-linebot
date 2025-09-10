@@ -1,11 +1,13 @@
 /*
  =========================
   love.mjs（完全版｜ループ根絶 & 二重押下防止）
+  - ルーター不要でも自己完結できる flow ガードを内蔵
+  - 未初期化時は “開始トリガー” のときのみ初期化（自動リセット廃止）
+  - 同一メッセージIDの重複受信を弾く（last_msg_id）※このフローを処理すると決めた後に記録
   - 年代→即Q1（"開始"ボタン廃止）
-  - 同一メッセージIDの再送を弾く（last_msg_id）
-  - 質問ボタンは Q{id}-{n}、サーバ側で id 一致 & 未回答のみ採用
+  - 設問ボタンは Q{id}-{n}、サーバ側で id 一致 & 未回答のみ採用
   - 表示用は（）除去
-  - 最終承諾フローは据え置き
+  - 最終承諾フロー据え置き
  =========================
 */
 
@@ -16,6 +18,12 @@ import { messagingApi } from '@line/bot-sdk'
 
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
+
+// ── この言葉で診断を開始（必要に応じて増やしてOK）
+const LOVE_TRIGGERS = ['恋愛診断', '恋診断', 'ラブ診断', '診断書', 'love', 'LOVE']
+
+// 年代一覧（重複定義防止）
+const AGE_OPTIONS = ['10代未満', '10代', '20代', '30代', '40代', '50代', '60代', '70代以上']
 
 // ====== 起動時ログ ======
 ;(() => {
@@ -176,10 +184,8 @@ function buildFinalConfirmFlex() {
             spacing: 'md',
             margin: 'lg',
             contents: [
-              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md',
-                action: { type: 'message', label: '承諾', text: '承諾' } },
-              { type: 'button', style: 'secondary', height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
+              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md', action: { type: 'message', label: '承諾', text: '承諾' } },
+              { type: 'button', style: 'secondary', height: 'md', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         ],
@@ -196,7 +202,7 @@ export async function sendLove40Intro(event) {
   const userId = event.source?.userId
   if (userId) await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
   await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
-  await push(userId, buildIntroButtonsFlex())
+  if (userId) await push(userId, buildIntroButtonsFlex())
 }
 
 export async function handleLove(event) {
@@ -204,16 +210,30 @@ export async function handleLove(event) {
   const userId = event.source?.userId
   if (!userId) return
 
-  // ── ① 同一メッセージIDを弾く（DBに last_msg_id カラム必須） ──
-  const msgId = event.message?.id || ''
+  const raw = (event.message.text || '').trim().normalize('NFKC')
+  const t   = raw
+  const tn  = raw.replace(/\s+/g, '')
+  const isTrigger = LOVE_TRIGGERS.includes(tn)
+
+  // 現在のセッションを取得
   const s0 = await loadSession(userId)
+
+  // ★ flow ガード：このフロー中 or トリガー時以外は何もしない（ループ根絶ポイント）
+  if (s0?.flow !== 'love40' && !isTrigger) return
+
+  // ここで初めて「重複メッセージID」を弾く（他フローを巻き込まない）
+  const msgId = event.message?.id || ''
   if (s0?.last_msg_id === msgId) return
   await setSession(userId, { last_msg_id: msgId })
 
-  const raw = (event.message.text || '').trim().normalize('NFKC')
-  const t = raw
-  const tn = raw.replace(/\s+/g, '')
+  // トリガーで未初期化なら、ここで初期化して案内
+  if (isTrigger && s0?.flow !== 'love40') {
+    await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
+    await sendLove40Intro(event)
+    return
+  }
 
+  // 以降は love40 フローの本体
   const s = s0 || { user_id: userId, flow: 'love40', love_step: 'PRICE', love_idx: 0 }
 
   // ── PRICE ──
@@ -240,12 +260,10 @@ export async function handleLove(event) {
             contents: [
               { type: 'text', text: '性別を選んでね', weight: 'bold', size: 'md' },
               ...['女性', '男性', 'その他'].map((label) => ([
-                { type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
-                  action: { type: 'message', label, text: label } },
+                { type: 'button', style: 'primary', height: 'sm', color: '#B39DDB', action: { type: 'message', label, text: label } },
                 { type: 'separator', margin: 'md', color: '#FFFFFF00' },
               ])).flat(),
-              { type: 'button', style: 'secondary', height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
+              { type: 'button', style: 'secondary', height: 'md', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         },
@@ -257,6 +275,7 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
     }
+    // 誘導のため再掲
     await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
     await push(userId, buildIntroButtonsFlex())
     return
@@ -288,7 +307,6 @@ export async function handleLove(event) {
     await setSession(userId, { love_step: 'PROFILE_AGE', love_profile: profile })
 
     // 年代選択を表示
-    const ages = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
     await safeReply(event.replyToken, {
       type: 'flex',
       altText: '年代を選んでね',
@@ -302,9 +320,8 @@ export async function handleLove(event) {
           paddingAll: '20px',
           contents: [
             { type: 'text', text: '年代を選んでね', weight: 'bold', size: 'md' },
-            ...ages.map((label) => ([
-              { type: 'button', style: 'primary', height: 'sm', color: '#81D4FA',
-                action: { type: 'message', label, text: label } },
+            ...AGE_OPTIONS.map((label) => ([
+              { type: 'button', style: 'primary', height: 'sm', color: '#81D4FA', action: { type: 'message', label, text: label } },
               { type: 'separator', margin: 'md', color: '#FFFFFF00' },
             ])).flat(),
           ],
@@ -316,8 +333,7 @@ export async function handleLove(event) {
 
   // ── PROFILE_AGE（年代→即Q1） ──
   if (s?.love_step === 'PROFILE_AGE') {
-    const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
-    if (!okAges.includes(tn)) {
+    if (!AGE_OPTIONS.includes(tn)) {
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '年代を選んでね',
@@ -327,7 +343,7 @@ export async function handleLove(event) {
             type: 'box',
             layout: 'vertical',
             spacing: 'md',
-            contents: okAges.map((label) => ({
+            contents: AGE_OPTIONS.map((label) => ({
               type: 'button', style: 'primary', height: 'sm', color: '#81D4FA',
               action: { type: 'message', label, text: label },
             })),
@@ -347,7 +363,7 @@ export async function handleLove(event) {
     }
     await setSession(userId, newSession)
 
-    // 年代直後にQ1を表示（開始ボタン無し）
+    // 年代直後にQ1を表示
     await sendNextLoveQuestion(event, { ...s, ...newSession })
     return
   }
@@ -360,7 +376,7 @@ export async function handleLove(event) {
 
     const answeredMap = s.love_answered_map || {}
 
-    // "Q{ID}-{n}" を解釈（後方互換で 1〜4 / 選択肢本文 も拾う）
+    // "Q{ID}-{n}" を解釈（後方互換: 1〜4 / 選択肢本文）
     let pick = null, qid = null
     const m = /^Q(\d+)[-: ]?([1-4])$/.exec(t)
     if (m) {
@@ -377,9 +393,9 @@ export async function handleLove(event) {
       qid = currentQ.id
     }
 
-    // id一致 & 有効 & 未回答 だけ採用
+    // id一致 & 有効 & 未回答のみ採用
     if (qid !== currentQ.id || !/^[1-4]$/.test(pick)) {
-      await sendNextLoveQuestion(event, s)  // 認識できない入力は現行Qを再掲
+      await sendNextLoveQuestion(event, s) // 認識できない入力は現行Qを再掲
       return
     }
     if (answeredMap[String(qid)]) return
@@ -423,6 +439,7 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
       return
     }
+    // 再掲
     await safeReply(
       event.replyToken,
       '🧾 最終確認\n' +
@@ -433,9 +450,9 @@ export async function handleLove(event) {
     return
   }
 
-  // ── 未初期化 → ご案内 ──
-  await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
-  await sendLove40Intro(event)
+  // ここまで来るのは「love40 だが step が想定外」のときだけ。
+  // 自動リセットはしない（ループ防止）。必要なら明示的トリガーを促す。
+  await safeReply(event.replyToken, '続きがうまく進まないみたい…「恋愛診断」と送ると最初からやり直せるよ🌸')
 }
 
 /* =========================
@@ -499,7 +516,7 @@ async function sendAnswersAsTextAndNotice(event, session) {
    ========================= */
 async function loadSession(userId) {
   const { data } = await supabase.from(SESSION_TABLE).select('*').eq('user_id', userId).maybeSingle()
-  return data || { user_id: userId, flow: 'love40', love_step: 'PRICE', love_idx: 0 }
+  return data || null
 }
 
 async function setSession(userId, patch) {
