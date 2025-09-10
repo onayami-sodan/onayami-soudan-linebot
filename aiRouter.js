@@ -124,7 +124,7 @@ const LOVE_INTRO_TEXT = [
   '',
   '📄 お届け内容：総合タイプ判定、強み/つまずき、今すぐの一歩、相手タイプ別の距離の縮め方、セルフケア',
   '💳 料金：フル 2,980円 / ライト 1,500円（学割あり）',
-  '⏱ 目安：24〜48時間以内',
+  '⏱ 目安：48時間以内',
   '🔐 プライバシー：診断以外の目的では利用しません',
   '',
   '✅ 進める場合は「承諾」を押してね（キャンセル可）',
@@ -293,10 +293,12 @@ async function handleRichMenuText(event, userId) {
 
   // ★flowに関係なく即切替（ユーザー操作最優先）
   if (app === 'ai') {
-    await setUserFlow(userId, 'ai')
-    await safeReply(event.replyToken, 'AI相談員ちゃんを開きますね🌸')
-    return true
-  }
+  await setUserFlow(userId, 'ai')
+  // ★ 案内文を返す（ここに AI_SOUDA_N_ANNOUNCE を呼ぶ）
+  await safeReply(event.replyToken, AI_SOUDA_N_ANNOUNCE)
+  return true
+}
+
   if (app === 'palm') {
     await setUserFlow(userId, 'palm', { palm_step: 'PRICE' })
     await sendPalmistryIntro(event)
@@ -315,15 +317,16 @@ async function handleRichMenuText(event, userId) {
    ステップ：PRICE → GENDER → AGE_GROUP → HAND → GUIDE → WAIT_IMAGE
    ========================= */
 async function sendPalmistryIntro(event) {
-  await replyWithChoices(
-    event.replyToken,
-    PALM_INTRO_TEXT,
-    [
-      { label: '承諾', text: '承諾' },
-      { label: 'キャンセル', text: 'キャンセル' },
-    ]
-  )
-}
+await replyWithChoices(
+  event.replyToken,
+  PALM_INTRO_TEXT,
+  [
+    { label: '承諾', text: '承諾' },
+    { label: 'キャンセル', text: 'キャンセル' },
+    { label: '💌 はじめの画面へ', text: 'トークTOP' }, // ★ 追加
+  ]
+)
+
 
 async function handlePalmistryFlow(event, session) {
   const msgType = event.message?.type
@@ -362,10 +365,16 @@ async function handlePalmistryFlow(event, session) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return true
     }
-    await replyWithChoices(event.replyToken, '進める場合は「承諾」を押してね🌸', [
-      { label: '承諾', text: '承諾' },
-      { label: 'キャンセル', text: 'キャンセル' },
-    ])
+    await replyWithChoices(
+  event.replyToken,
+  LOVE_INTRO_TEXT,
+  [
+    { label: '承諾', text: '承諾' },
+    { label: 'キャンセル', text: 'キャンセル' },
+    { label: '💌 はじめの画面へ', text: 'トークTOP' }, // ★ 追加
+  ]
+)
+
     return true
   }
 
