@@ -19,7 +19,7 @@ const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
 
 const LOVE_TRIGGERS = ['恋愛診断', '恋診断', 'ラブ診断', '診断書', 'love', 'LOVE']
-const GENDER_OPTIONS = ['女性', '男性', 'その他']
+const GENDER_OPTIONS = ['男性', '女性', 'その他']
 const AGE_OPTIONS = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
 
 // ====== 起動時ログ ======
@@ -78,6 +78,11 @@ async function getLineDisplayName(userId){
 }
 const isQButton = (txt) => /^Q(\d+)[-: ]?([1-4])$/.test(txt)
 
+// ★ 追加：IDを数値化（'Q1' / '01' / 1 → 1）
+function toNumericId(id){
+  return Number(String(id).replace(/\D/g,'')) || 0
+}
+
 // ====== Flex builders ======
 function buildIntroButtonsFlex(){
   return {
@@ -98,6 +103,7 @@ function buildQuestionFlex(q){
   const circled = ['①','②','③','④']
   const qText = cleanForUser(q.text)
   const choiceLabels = q.choices.map(c=>cleanForUser(c))
+  const numericId = toNumericId(q.id) // ★ 修正：送信IDは常に数値
   return {
     type:'flex', altText:`Q${q.id}. ${qText}`,
     contents:{ type:'bubble', size:'mega',
@@ -105,7 +111,7 @@ function buildQuestionFlex(q){
         { type:'text', text:`Q${q.id}. ${qText}`, wrap:true, weight:'bold', size:'md' },
         ...choiceLabels.map((label,i)=>([
           { type:'button', style:'primary', height:'sm', color:'#F59FB0',
-            action:{ type:'message', label:`${circled[i]} ${label}`, text:`Q${q.id}-${i+1}` } },
+            action:{ type:'message', label:`${circled[i]} ${label}`, text:`Q${numericId}-${i+1}` } }, // ★ここ
           { type:'separator', margin:'md', color:'#FFFFFF00' },
         ])).flat(),
       ] },
@@ -268,15 +274,17 @@ export async function handleLove(event){
         const pos = currentQ.choices?.findIndex(c => cleanForUser(c)===t || c===t)
         if (pos>=0) pick=String(pos+1)
       }
-      qid=currentQ.id
+      qid = toNumericId(currentQ.id) // ★ 修正：current を数値化
     }
 
-    if (qid!==currentQ.id || !/^[1-4]$/.test(pick)){ await sendNextLoveQuestion(event, s); return }
-    if (answeredMap[String(qid)]) return
+    // ★ 修正：両者を数値で比較
+    const currentNumericId = toNumericId(currentQ.id)
+    if (qid!==currentNumericId || !/^[1-4]$/.test(pick)){ await sendNextLoveQuestion(event, s); return }
+    if (answeredMap[String(currentNumericId)]) return
 
     const answers=[...(s.love_answers||[]), pick]
     const nextIdx=idx+1
-    const nextMap={ ...answeredMap, [String(qid)]:true }
+    const nextMap={ ...answeredMap, [String(currentNumericId)]:true } // ★ 数値idで記録
 
     await setSession(userId, { flow:'love40', love_step:'Q', love_answers:answers, love_idx:nextIdx, love_answered_map:nextMap })
 
