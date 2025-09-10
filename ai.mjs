@@ -9,7 +9,7 @@ const SESSION_TABLE = 'user_sessions'
 const MAX_HISTORY_PAIRS = 12
 
 /* =========================
-   案内文（Quick Reply つき）
+   案内文（クイックリプライ削除版）
    ========================= */
 export async function sendAiIntro(event) {
   const message = {
@@ -49,11 +49,6 @@ export async function sendAiIntro(event) {
 AIには「名前」をつけたり、あなたの好きなキャラに設定したりできます🎀
 やさしい雰囲気・元気なノリ・落ち着いた大人っぽさなど、
 話し方をあなた好みに仕上げて楽しんでください💛`,
-    quickReply: {
-      items: [
-        { type: 'action', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } }
-      ]
-    }
   }
   await safeReply(event.replyToken, message)
 }
@@ -291,4 +286,3 @@ export async function handleAI(event) {
 
   await safeReply(event.replyToken, replyText)
 }
-
