@@ -1,3 +1,5 @@
+// palm.mjs（置き換え版）
+
 import { supabase } from './supabaseClient.js'
 import { safeReply } from './lineClient.js'
 
@@ -63,9 +65,13 @@ async function replyWithChoices(replyToken, text, choices = []) {
 }
 
 /* =========================
-   案内文を表示
+   案内文を表示（ここで必ず初期化）
    ========================= */
 export async function sendPalmistryIntro(event) {
+  const userId = event.source?.userId
+  if (userId) {
+    await setSession(userId, { flow: 'palm', palm_step: 'PRICE' })
+  }
   await replyWithChoices(event.replyToken, PALM_INTRO_TEXT, [
     { label: '承諾', text: '承諾' },
     { label: 'キャンセル', text: 'キャンセル' },
@@ -86,6 +92,7 @@ export async function handlePalm(event) {
     if (s?.palm_step === 'WAIT_IMAGE') {
       await setSession(userId, { palm_step: 'PENDING_RESULT' })
       await safeReply(event.replyToken, 'お写真を受け取りました📸\n順番に拝見して診断します。48時間以内にお届けしますね🌸')
+      // フロー終了（TOPへ戻す）
       await setSession(userId, { flow: 'idle', palm_step: null })
       return
     }
@@ -94,14 +101,17 @@ export async function handlePalm(event) {
     return
   }
 
-  // テキスト
+  // テキスト以外は無視
   if (!(event.type === 'message' && event.message?.type === 'text')) return
-  const t = (event.message.text || '').trim().normalize('NFKC')
+
+  const raw = (event.message.text || '').trim().normalize('NFKC')
+  const tn = raw.replace(/\s+/g, '') // スペース除去版（“準備 完了”“ 左手 ”などにも対応）
   const s = await loadSession(userId)
+  const step = s?.palm_step || 'PRICE'
 
   // PRICE
-  if (s?.palm_step === 'PRICE') {
-    if (t === '承諾') {
+  if (step === 'PRICE') {
+    if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
       await setSession(userId, { palm_step: 'GENDER' })
       await replyWithChoices(event.replyToken, '性別を教えてね', [
         { label: '男性', text: '男性' },
@@ -110,7 +120,7 @@ export async function handlePalm(event) {
       ])
       return
     }
-    if (t === 'キャンセル') {
+    if (tn === 'キャンセル') {
       await setSession(userId, { flow: 'idle', palm_step: null })
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
@@ -124,8 +134,8 @@ export async function handlePalm(event) {
   }
 
   // GENDER
-  if (s?.palm_step === 'GENDER') {
-    const ok = ['男性', '女性', 'その他'].includes(t)
+  if (step === 'GENDER') {
+    const ok = ['男性', '女性', 'その他'].includes(tn)
     if (!ok) {
       await replyWithChoices(event.replyToken, '性別を選んでね', [
         { label: '男性', text: '男性' },
@@ -134,7 +144,7 @@ export async function handlePalm(event) {
       ])
       return
     }
-    await setSession(userId, { palm_step: 'AGE', palm_gender: t })
+    await setSession(userId, { palm_step: 'AGE', palm_gender: tn })
     await replyWithChoices(
       event.replyToken,
       '年代を選んでね',
@@ -144,8 +154,8 @@ export async function handlePalm(event) {
   }
 
   // AGE
-  if (s?.palm_step === 'AGE') {
-    if (!PALM_AGE_TO_NUMBER.has(t)) {
+  if (step === 'AGE') {
+    if (!PALM_AGE_TO_NUMBER.has(tn)) {
       await replyWithChoices(
         event.replyToken,
         '年代を選んでね',
@@ -155,8 +165,8 @@ export async function handlePalm(event) {
     }
     await setSession(userId, {
       palm_step: 'HAND',
-      palm_age_group: t,
-      palm_age: PALM_AGE_TO_NUMBER.get(t),
+      palm_age_group: tn,
+      palm_age: PALM_AGE_TO_NUMBER.get(tn),
     })
     await replyWithChoices(
       event.replyToken,
@@ -170,15 +180,15 @@ export async function handlePalm(event) {
   }
 
   // HAND
-  if (s?.palm_step === 'HAND') {
-    if (!/(左手|右手)/.test(t)) {
+  if (step === 'HAND') {
+    if (!(tn === '左手' || tn === '右手')) {
       await replyWithChoices(event.replyToken, '左手 か 右手 を選んでね', [
         { label: '左手', text: '左手' },
         { label: '右手', text: '右手' },
       ])
       return
     }
-    await setSession(userId, { palm_step: 'GUIDE', palm_hand: t })
+    await setSession(userId, { palm_step: 'GUIDE', palm_hand: tn })
     await replyWithChoices(
       event.replyToken,
       '📸 撮影ガイド\n・手のひら全体が写るように\n・指先まで入れる\n・明るい場所でピントを合わせて\n準備OKなら「準備完了」を押してね',
@@ -188,8 +198,8 @@ export async function handlePalm(event) {
   }
 
   // GUIDE
-  if (s?.palm_step === 'GUIDE') {
-    if (t === '準備完了') {
+  if (step === 'GUIDE') {
+    if (tn === '準備完了') {
       await setSession(userId, { palm_step: 'WAIT_IMAGE' })
       await safeReply(event.replyToken, 'OK！画像を送ってください✋（1枚）')
       return
@@ -200,7 +210,13 @@ export async function handlePalm(event) {
     return
   }
 
-  // 未初期化ならご案内へ
+  // WAIT_IMAGE / PENDING_RESULT などでテキストが来た場合
+  if (step === 'WAIT_IMAGE' || step === 'PENDING_RESULT') {
+    await safeReply(event.replyToken, '今は画像をお待ちしています📸\n撮影ガイド：明るい場所で手のひら全体が入るように撮ってね！')
+    return
+  }
+
+  // 未初期化や未知のステップはリセット
   await setSession(userId, { flow: 'palm', palm_step: 'PRICE' })
   await sendPalmistryIntro(event)
 }
@@ -209,12 +225,16 @@ export async function handlePalm(event) {
    セッション I/O（palm系プロパティのみ変更）
    ========================= */
 async function loadSession(userId) {
-  const { data } = await supabase.from(SESSION_TABLE).select('*').eq('user_id', userId).maybeSingle()
+  const { data } = await supabase
+    .from(SESSION_TABLE)
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle()
   return data || { user_id: userId, flow: 'palm', palm_step: 'PRICE' }
 }
 async function setSession(userId, patch) {
+  if (!userId) return
   const row = await loadSession(userId)
   const payload = { ...row, ...patch, updated_at: new Date().toISOString() }
   await supabase.from(SESSION_TABLE).upsert(payload, { onConflict: 'user_id' })
 }
-
