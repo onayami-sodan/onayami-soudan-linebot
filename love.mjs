@@ -1,6 +1,6 @@
-// love.mjs（回答テキスト化→送信→48時間案内まで実装・安定版：開始ループ修正）
+// love.mjs（回答テキスト→テキスト送信・開始ループ修正・reply→push 切替）
 
-import { safeReply } from './lineClient.js'
+import { safeReply, push } from './lineClient.js'   // ← push を使う
 import { supabase } from './supabaseClient.js'
 import { QUESTIONS } from './questions.js'
 import { messagingApi } from '@line/bot-sdk'
@@ -45,11 +45,22 @@ async function replyWithChoices(replyToken, text, choices = []) {
   })
 }
 
-// ====== 長文分割送信 ======
-async function replyChunked(replyToken, bigText, chunkSize = 4000) {
-  if (!bigText || typeof bigText !== 'string') return
-  for (let i = 0; i < bigText.length; i += chunkSize) {
-    await safeReply(replyToken, bigText.slice(i, i + chunkSize))
+// ====== 長文分割送信（1通目 reply、2通目以降 push） ======
+function splitChunks(text, size = 4500) {
+  const out = []
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size))
+  return out
+}
+async function replyThenPush(userId, replyToken, bigText) {
+  if (!bigText) return
+  const chunks = splitChunks(bigText, 4500)
+  if (chunks.length === 0) return
+  // 1通目は replyToken で送る
+  await safeReply(replyToken, chunks[0])
+  // 2通目以降は push
+  for (let i = 1; i < chunks.length; i++) {
+    await push(userId, chunks[i])
+    // 少し間を空けてもOK：await new Promise(r=>setTimeout(r,120))
   }
 }
 
@@ -93,7 +104,7 @@ async function sendNextLoveQuestion(event, session) {
   return false
 }
 
-// ====== 回答控え送信＋48h案内 ======
+// ====== 回答控え送信＋48h案内（テキストで返す） ======
 async function sendAnswersAsTextAndNotice(event, session) {
   const userId = event.source?.userId
   const nickname = await getLineDisplayName(userId)
@@ -118,9 +129,14 @@ async function sendAnswersAsTextAndNotice(event, session) {
     lines.push('')
   }
 
-  await replyChunked(event.replyToken, lines.join('\n'))
-  await safeReply(
-    event.replyToken,
+  const txt = lines.join('\n')
+
+  // ★ 1通目は reply、2通目以降は push で確実に届ける
+  await replyThenPush(userId, event.replyToken, txt)
+
+  // 最後の案内は push（replyToken は既に使用済み想定）
+  await push(
+    userId,
     '💌 ありがとう！回答を受け取ったよ。\n' +
       '48時間以内に「恋愛診断書」のURLをLINEでお届けするね。\n' +
       '順番に作成しているので、もうちょっと待っててね💛'
@@ -203,23 +219,21 @@ export async function handleLove(event) {
     return
   }
 
-  // Q（開始ループ修正：回答解釈を先、開始チェックは後）
+  // Q（回答解釈→開始チェックの順）
   if (s?.love_step === 'Q') {
     const idx = s.love_idx ?? 0
 
-    // まず「回答かどうか」を判定
+    // 回答の解釈（〇囲み/全角数字も拾う）
     let pick = t
-    const circled = { '①': '1', '②': '2', '③': '3', '④': '4' }
+    const circled = { '①': '1', '②': '2', '③': '3', '④': '4', '１': '1', '２': '2', '３': '3', '４': '4' }
     if (circled[pick]) pick = circled[pick]
     if (!/^[1-4]$/.test(pick)) {
-      // Q0 のときは現在Qで照合、それ以外は直前Qで照合
       const refQ = idx === 0 ? QUESTIONS[0] : (QUESTIONS[idx - 1] || QUESTIONS[idx])
       const pos = refQ?.choices?.findIndex((c) => c === t)
       if (pos >= 0) pick = String(pos + 1)
     }
 
     if (/^[1-4]$/.test(pick)) {
-      // 有効回答 → 記録して次のQを出す
       const answers = [...(s.love_answers || []), pick]
       const nextIdx = idx + 1
       await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
@@ -227,10 +241,9 @@ export async function handleLove(event) {
       return
     }
 
-    // 回答ではなかった → 最初だけ開始必須
+    // 回答じゃない → 最初だけ開始必須
     if (idx === 0) {
       if (tn === '開始') {
-        // love_idx は0のままでQ1を提示（回答は次のメッセージで受理）
         await sendNextLoveQuestion(event, s)
         return
       }
@@ -238,7 +251,7 @@ export async function handleLove(event) {
       return
     }
 
-    // それ以外は次のQを再掲
+    // それ以外は現在のQを再掲
     await sendNextLoveQuestion(event, s)
     return
   }
