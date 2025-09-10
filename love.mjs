@@ -1,6 +1,14 @@
-// love.mjs（回答テキスト→テキスト送信・開始ループ修正・reply→push 切替）
+/*
+ =========================
+   love.mjs（完全版フル）
+   - 回答テキストをそのまま送信
+   - 開始ループ修正
+   - reply→push 切替で長文送信安定化
+   - セッション保存は部分更新
+ =========================
+*/
 
-import { safeReply, push } from './lineClient.js'   // ← push を使う
+import { safeReply, push } from './lineClient.js'
 import { supabase } from './supabaseClient.js'
 import { QUESTIONS } from './questions.js'
 import { messagingApi } from '@line/bot-sdk'
@@ -55,12 +63,9 @@ async function replyThenPush(userId, replyToken, bigText) {
   if (!bigText) return
   const chunks = splitChunks(bigText, 4500)
   if (chunks.length === 0) return
-  // 1通目は replyToken で送る
-  await safeReply(replyToken, chunks[0])
-  // 2通目以降は push
+  await safeReply(replyToken, chunks[0]) // 1通目 reply
   for (let i = 1; i < chunks.length; i++) {
-    await push(userId, chunks[i])
-    // 少し間を空けてもOK：await new Promise(r=>setTimeout(r,120))
+    await push(userId, chunks[i])        // 2通目以降 push
   }
 }
 
@@ -76,7 +81,7 @@ async function getLineDisplayName(userId) {
   }
 }
 
-// ====== 公開: 案内文表示（ここで確実に初期化） ======
+// ====== 公開: 案内文表示（ここで初期化） ======
 export async function sendLove40Intro(event) {
   const userId = event.source?.userId
   if (userId) await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
@@ -131,10 +136,10 @@ async function sendAnswersAsTextAndNotice(event, session) {
 
   const txt = lines.join('\n')
 
-  // ★ 1通目は reply、2通目以降は push で確実に届ける
+  // reply→push で確実に送信
   await replyThenPush(userId, event.replyToken, txt)
 
-  // 最後の案内は push（replyToken は既に使用済み想定）
+  // 案内文は push
   await push(
     userId,
     '💌 ありがとう！回答を受け取ったよ。\n' +
@@ -223,7 +228,7 @@ export async function handleLove(event) {
   if (s?.love_step === 'Q') {
     const idx = s.love_idx ?? 0
 
-    // 回答の解釈（〇囲み/全角数字も拾う）
+    // 回答の解釈
     let pick = t
     const circled = { '①': '1', '②': '2', '③': '3', '④': '4', '１': '1', '２': '2', '３': '3', '４': '4' }
     if (circled[pick]) pick = circled[pick]
@@ -267,7 +272,6 @@ async function loadSession(userId) {
   return data || { user_id: userId, flow: 'love40', love_step: 'PRICE', love_idx: 0 }
 }
 
-// ★競合に強い「部分更新」版
 async function setSession(userId, patch) {
   if (!userId) return
   await supabase
