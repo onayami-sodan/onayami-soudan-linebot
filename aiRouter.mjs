@@ -717,46 +717,52 @@ async function handleAiChat(event, session) {
    エクスポート（イベント1件を処理）
    ========================= */
 async function handleAI(event) {
-  if (!event) return;
-
-  const userId = event.source?.userId;
-  if (!userId) return;
+  if (!event) return
+  const userId = event.source?.userId
+  if (!userId) return
 
   // 1) リッチメニュー（同義語含む）を最優先で判定
-  const handledMenu = await handleRichMenuText(event, userId);
-  if (handledMenu) return;
+  const handledMenu = await handleRichMenuText(event, userId)
+  if (handledMenu) return
 
-  // 2) 進行中フローに応じて処理
-  const session = (await loadSession(userId)) || { user_id: userId, flow: 'idle' };
-  const flow = session.flow || 'idle';
+  // 2) セッションを読み込む
+  const session = (await loadSession(userId)) || { user_id: userId, flow: 'idle' }
+  const flow = session.flow || 'idle'
 
-  // 手相フロー
+  // 3) 💌 トップモード（idle）なら何を送っても ENTRY_TEXT を返す
+  if (flow === 'idle') {
+    if (event.type === 'message' && event.message?.type === 'text') {
+      await safeReply(event.replyToken, ENTRY_TEXT)
+      return
+    }
+  }
+
+  // 4) 手相フロー
   if (flow === 'palm') {
-    const done = await handlePalmistryFlow(event, session);
-    if (done) return;
+    const done = await handlePalmistryFlow(event, session)
+    if (done) return
   }
 
-  // 恋愛40問フロー
+  // 5) 恋愛40問フロー
   if (flow === 'love40') {
-    const done = await handleLove40Flow(event, session);
-    if (done) return;
+    const done = await handleLove40Flow(event, session)
+    if (done) return
   }
 
-  // AI相談（idle または ai の時は通常会話）
-  if (event.type === 'message' && event.message?.type === 'text') {
-    await setUserFlow(userId, 'ai'); // idle の場合は ai として扱う
-    await handleAiChat(event, { ...(session || {}), user_id: userId });
-    return;
+  // 6) AI相談フロー
+  if (flow === 'ai' && event.type === 'message' && event.message?.type === 'text') {
+    await handleAiChat(event, { ...(session || {}), user_id: userId })
+    return
   }
 
-  // 未対応イベント（画像・スタンプ等）→軽いガイド
+  // 7) 未対応イベント（画像・スタンプなど）
   if (event.type === 'message' && event.message?.type !== 'text') {
     await safeReply(
       event.replyToken,
       'ありがとう！文字で送ってくれたら、もっと具体的にお手伝いできるよ🌸'
-    );
+    )
   }
 }
 
-export { handleAI };       // named export
-export default handleAI;   // default export（どちらでimportしてもOK）
+export { handleAI }
+export default handleAI
