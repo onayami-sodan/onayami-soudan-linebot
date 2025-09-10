@@ -1,10 +1,12 @@
-// server.js
+/* =========================
+   server.js（💌 はじめの画面へ対応版）
+   ========================= */
 import 'dotenv/config'
 import express from 'express'
 import { messagingApi } from '@line/bot-sdk'
 
 import { safeReply } from './lineClient.js'
-import { handleAI } from './aiRouter.js'          // ← aiRouter.js にハンドラ実装済み
+import { handleAI } from './aiRouter.js'          // ai/palm/renai の通常処理をここに委譲
 import { isOpen, setOpen } from './featureFlags.js'
 
 const app = express()
@@ -23,6 +25,20 @@ const ADMIN_IDS = (process.env.ADMIN_USER_IDS || '')
 
 // 管理対象サービスキー（featureFlags.js のキーと一致）
 const SERVICES = ['ai', 'palm', 'renai']
+
+/** -------- 固定テキスト -------- **/
+
+// ENTRY_TEXT（最初のメイントーク画面）
+const ENTRY_TEXT = `🌸 ご利用ありがとうございます 🌸
+
+このLINEでは4つのサービスをご用意しています💕
+
+1️⃣ 恋愛診断書（40問心理テスト）
+2️⃣ 手相診断（あなたの手のひらから未来を読み解きます）
+3️⃣ AI相談室（毎日5ターン無料／無制限プランあり）
+4️⃣ 電話相談（経験豊富な相談員と直接お話／予約制・有料）
+
+下のリッチメニューからお好きなサービスを選んでください💛`
 
 /** -------- ユーティリティ -------- **/
 
@@ -53,7 +69,7 @@ function parseAdminCommand(text) {
   return null
 }
 
-// 自分の userId を返す（管理者設定チェック用）
+// 自分の userId を返す（管理者チェック用）
 function whoami(event) {
   return `your userId: ${event?.source?.userId || 'unknown'}`
 }
@@ -66,7 +82,7 @@ app.get('/ping', (_, res) => res.status(200).send('pong'))
 // Webhook
 app.post('/webhook', async (req, res) => {
   const events = req.body?.events || []
-  res.status(200).send('OK') // 先にレスポンス
+  res.status(200).send('OK') // 先にレスポンス返す
   for (const e of events) {
     await handleEventSafely(e)
   }
@@ -85,7 +101,12 @@ async function handleEventSafely(event) {
         return safeReply(event.replyToken, whoami(event))
       }
 
-      // ★ 管理者コマンド処理
+      // 💌 はじめの画面へ → ENTRY_TEXT に戻る
+      if (text === 'トークTOP') {
+        return safeReply(event.replyToken, ENTRY_TEXT)
+      }
+
+      // 管理者コマンド処理
       const cmd = parseAdminCommand(text)
       if (cmd) {
         if (!isAdmin) {
@@ -111,7 +132,7 @@ async function handleEventSafely(event) {
       }
     }
 
-    // ★ 通常処理は aiRouter に委譲（中で palm/renai/ai を分岐）
+    // 通常処理は aiRouter に委譲（ai/palm/renai を内部で分岐）
     return handleAI(event)
   } catch (err) {
     console.error('[ERROR] handleEventSafely:', err)
