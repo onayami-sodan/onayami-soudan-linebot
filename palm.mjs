@@ -38,14 +38,12 @@ const PALM_INTRO_TEXT = [
   '・相性や距離感のヒントになる',
   '・家族や子どもの運勢を知るきっかけにも',
   '',
-  
-
   '📄 診断作成料金（今だけ特別価格）',
   '1) フル診断（30項目カルテ） 10,000円 → 4,980円',
   '2) 学生支援（1項目診断）   2,500円 → 1,500円',
   '3) 相性診断（右手2枚セット） 6,000円 → 2,980円',
   '',
-   '💳 お支払い方法',
+  '💳 お支払い方法',
   '・PayPay',
   '・クレジットカード（Visa / Master / JCB / AMEX など）',
   '・携帯キャリア決済（SoftBank / au / docomo）',
@@ -88,7 +86,7 @@ function buildIntroButtonsFlex() {
               },
               {
                 type: 'button',
-                style: 'secondary', // ← secondaryにcolorは付けない
+                style: 'secondary', // secondaryにcolorは付けない
                 height: 'md',
                 action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
               },
@@ -234,11 +232,9 @@ export async function handlePalm(event) {
     if (s?.palm_step === 'WAIT_IMAGE') {
       await setSession(userId, { palm_step: 'PENDING_RESULT' })
       await safeReply(event.replyToken, 'お写真を受け取りました📸\n順番に拝見して診断します。48時間以内にお届けしますね🌸')
-      // フロー終了（TOPへ戻す）
-      await setSession(userId, { flow: 'idle', palm_step: null })
+      await setSession(userId, { flow: 'idle', palm_step: null }) // フロー終了
       return
     }
-    // それ以外のタイミングで画像が来たら軽く案内
     await safeReply(event.replyToken, 'まずはご案内から進めるね。リッチメニューで「手相占い診断」を押してね🌸')
     return
   }
@@ -322,17 +318,11 @@ export async function handlePalm(event) {
     return
   }
 
-  // GUIDE → 最終承諾（ここで料金の最終確認を出す）
+  // GUIDE → 最終承諾（Flexのみ表示して二重表示を防止）
   if (step === 'GUIDE') {
     if (tn === '準備完了') {
       await setSession(userId, { palm_step: 'CONFIRM_PAY' })
-      await safeReply(
-        event.replyToken,
-        '🧾 最終確認\n' +
-        'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-        '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
-      )
-      await push(userId, buildFinalConfirmFlex())
+      await safeReply(event.replyToken, buildFinalConfirmFlex()) // ← テキスト送らずFlexのみ
       return
     }
     await safeReply(event.replyToken, buildGuideFlex())
@@ -342,7 +332,6 @@ export async function handlePalm(event) {
   // 最終承諾
   if (step === 'CONFIRM_PAY') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
-      // 画像受付に遷移
       await setSession(userId, { palm_step: 'WAIT_IMAGE' })
       await safeReply(event.replyToken, 'OK！画像を送ってください✋（1枚）')
       return
@@ -352,14 +341,8 @@ export async function handlePalm(event) {
       await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
       return
     }
-    // 迷い入力 → 再掲
-    await safeReply(
-      event.replyToken,
-      '🧾 最終確認\n' +
-      'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-      '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
-    )
-    await push(userId, buildFinalConfirmFlex())
+    // 再掲も Flex のみ
+    await safeReply(event.replyToken, buildFinalConfirmFlex())
     return
   }
 
