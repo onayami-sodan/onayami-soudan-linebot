@@ -1,7 +1,7 @@
 /*
  =========================
    love.mjs（完全版フル）
-   - 案内：横並びの大きい色付きボタン（Flex）
+   - 案内：長文はテキストで全文表示 + 横並びの大きい色付きボタン（Flex）
    - 設問：縦並びの大きいボタン（Flex）
    - 回答テキストをそのまま送信（reply→push 切替で安定）
    - 開始ループ修正
@@ -16,6 +16,29 @@ import { messagingApi } from '@line/bot-sdk'
 
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
+
+// ====== 案内文（全文） ======
+const LOVE_INTRO_TEXT = [
+  '💘 恋愛診断書（40問）ご案内',
+  '',
+  'あなたの「恋のクセ」「相性の傾向」「距離感の取り方」を、40問の直感テストで読み解きます',
+  '結果は読みやすいレポート形式でお届け',
+  '',
+  'おすすめ：片思い/復縁/結婚の迷いを整理・同じ失敗の要因を把握・魅力や“刺さる距離感”を知って関係を進めたい方に',
+  '',
+  'わかること：恋愛タイプ・依存/尽くしサイン・連絡/デート頻度の最適解・つまずきやすい場面と回避・相手タイプ別アプローチ',
+  '',
+  '🧭 進み方（選択式）',
+  '1) 承諾 → 2) プロフィール入力 → 3) Q1〜Q40を4択で回答 → 4) レポートお届け',
+  '所要時間：5〜8分（途中離脱OK）',
+  '',
+  '📄 お届け内容：総合タイプ判定、強み/つまずき、今すぐの一歩、相手タイプ別の距離の縮め方、セルフケア',
+  '💳 料金：フル 2,980円 / ライト 1,500円（学割あり）',
+  '⏱ 目安：48時間以内',
+  '🔐 プライバシー：診断以外の目的では利用しません',
+  '',
+  '✅ 進める場合は「承諾」を押してね（キャンセル可）',
+]
 
 // ====== 長文分割送信（1通目 reply、2通目以降 push） ======
 function splitChunks(text, size = 4500) {
@@ -49,11 +72,11 @@ async function getLineDisplayName(userId) {
    Flex builders
    ========================= */
 
-// 案内：横ボタン（色分け）
-function buildIntroFlex() {
+// 案内ボタン：横並び・色分け（長文は別送）
+function buildIntroButtonsFlex() {
   return {
     type: 'flex',
-    altText: '恋愛診断のご案内',
+    altText: '恋愛診断を開始しますか？',
     contents: {
       type: 'bubble',
       size: 'mega',
@@ -63,8 +86,7 @@ function buildIntroFlex() {
         spacing: 'lg',
         paddingAll: '20px',
         contents: [
-          { type: 'text', text: '💘 恋愛診断書（40問）ご案内', weight: 'bold', size: 'md', wrap: true },
-          { type: 'text', text: '進める場合は「承諾」を押してね', size: 'sm', wrap: true },
+          { type: 'text', text: '進める場合は「承諾」を押してね', size: 'md', wrap: true, weight: 'bold' },
           {
             type: 'box',
             layout: 'horizontal',
@@ -134,8 +156,10 @@ export async function sendLove40Intro(event) {
   const userId = event.source?.userId
   if (userId) await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
 
-  // Quick Replyはやめて、横並び色付きFlexを表示
-  await safeReply(event.replyToken, buildIntroFlex())
+  // 1) 案内長文はテキストで全文表示
+  await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
+  // 2) 直後に横並びボタンのFlexを表示
+  await push(userId, buildIntroButtonsFlex())
 }
 
 /* =========================
@@ -213,7 +237,7 @@ export async function handleLove(event) {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
       await setSession(userId, { love_step: 'PROFILE_GENDER', love_profile: {}, love_answers: [], love_idx: 0 })
 
-      // 性別選択もUX統一したい場合はFlex化可。ここでは簡潔にテキスト＋QRでもOK
+      // 性別選択（Flex縦ボタン）
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '性別を選んでね',
@@ -255,8 +279,9 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
     }
-    // 迷い入力 → 案内Flexを再掲
-    await safeReply(event.replyToken, buildIntroFlex())
+    // 迷い入力 → 案内を再掲
+    await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
+    await push(userId, buildIntroButtonsFlex())
     return
   }
 
@@ -288,7 +313,7 @@ export async function handleLove(event) {
     const profile = { ...(s.love_profile || {}), gender: t }
     await setSession(userId, { love_step: 'PROFILE_AGE', love_profile: profile })
 
-    // 年代選択もFlex化
+    // 年代選択（Flex縦ボタン）
     const ages = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
     await safeReply(event.replyToken, {
       type: 'flex',
@@ -324,7 +349,6 @@ export async function handleLove(event) {
   if (s?.love_step === 'PROFILE_AGE') {
     const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
     if (!okAges.includes(t)) {
-      // 再掲
       const ages = okAges
       await safeReply(event.replyToken, {
         type: 'flex',
