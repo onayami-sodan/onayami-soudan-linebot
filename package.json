@@ -2,10 +2,10 @@
   "name": "love-diagnosis-bot",
   "version": "2.0.0",
   "type": "module",
-  "main": "server.js",
+  "main": "server.mjs",
   "scripts": {
-    "dev": "node server.js",
-    "start": "node server.js"
+    "dev": "node server.mjs",
+    "start": "node server.mjs"
   },
   "engines": {
     "node": "20.x"
@@ -20,3 +20,4 @@
     "uuid": "^9.0.1"
   }
 }
+
