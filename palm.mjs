@@ -1,9 +1,11 @@
-// palm.mjs（完全版フル：大きいFlexボタンUX + 最終承諾フロー付き）
+// palm.mjs（完全版フル：大きいFlexボタンUX + 最終承諾でニックネーム/性別/年代を表示）
 
 import { supabase } from './supabaseClient.js'
 import { safeReply, push } from './lineClient.js'
+import { messagingApi } from '@line/bot-sdk'
 
 const SESSION_TABLE = 'user_sessions'
+const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || ''
 
 // 年代ボタン
 const PALM_AGE_OPTIONS = [
@@ -54,6 +56,20 @@ const PALM_INTRO_TEXT = [
   '✅ 進める場合は「承諾」を押してね（キャンセル可）',
 ]
 
+/* ========== 小物 ========== */
+
+// LINEニックネーム取得
+async function getLineDisplayName(userId) {
+  try {
+    if (!LINE_ACCESS_TOKEN || !userId) return ''
+    const client = new messagingApi.MessagingApiClient({ channelAccessToken: LINE_ACCESS_TOKEN })
+    const prof = await client.getProfile(userId)
+    return prof?.displayName || ''
+  } catch {
+    return ''
+  }
+}
+
 /* ========== Flex builders ========== */
 
 // 案内：横並びの大きいボタン（承諾 / はじめの画面へ）
@@ -77,19 +93,8 @@ function buildIntroButtonsFlex() {
             spacing: 'md',
             margin: 'lg',
             contents: [
-              {
-                type: 'button',
-                style: 'primary',
-                color: '#4CAF50',
-                height: 'md',
-                action: { type: 'message', label: '承諾', text: '承諾' },
-              },
-              {
-                type: 'button',
-                style: 'secondary', // secondaryにcolorは付けない
-                height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              },
+              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md', action: { type: 'message', label: '承諾', text: '承諾' } },
+              { type: 'button', style: 'secondary', height: 'md', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         ],
@@ -175,8 +180,12 @@ function buildGuideFlex() {
   }
 }
 
-// 最終承諾：横並びボタン（承諾 / トークTOP）※恋愛診断と同文面
-function buildFinalConfirmFlex() {
+// ★最終承諾：横並びボタン（承諾 / トークTOP）+ ニックネーム/性別/年代を表示
+function buildFinalConfirmFlex({ nickname = '', gender = '', ageGroup = '' } = {}) {
+  const nameLine = nickname ? `ご依頼者：${nickname}` : 'ご依頼者： (取得できませんでした)'
+  const genderLine = gender ? `性別：${gender}` : '性別： (未設定)'
+  const ageLine = ageGroup ? `年代：${ageGroup}` : '年代： (未設定)'
+
   return {
     type: 'flex',
     altText: '診断書作成の最終確認',
@@ -190,6 +199,7 @@ function buildFinalConfirmFlex() {
         paddingAll: '20px',
         contents: [
           { type: 'text', text: '診断書の作成には 3,980円（税込）が必要です。', wrap: true, weight: 'bold' },
+          { type: 'text', text: `${nameLine}\n${genderLine}\n${ageLine}`, wrap: true, size: 'sm' },
           { type: 'text', text: '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね', wrap: true, size: 'sm' },
           {
             type: 'box',
@@ -318,11 +328,17 @@ export async function handlePalm(event) {
     return
   }
 
-  // GUIDE → 最終承諾（Flexのみ表示して二重表示を防止）
+  // GUIDE → 最終承諾（Flexのみ表示）
   if (step === 'GUIDE') {
     if (tn === '準備完了') {
       await setSession(userId, { palm_step: 'CONFIRM_PAY' })
-      await safeReply(event.replyToken, buildFinalConfirmFlex()) // ← テキスト送らずFlexのみ
+      const nickname = await getLineDisplayName(userId)
+      const s2 = await loadSession(userId) // 直前のセット後の最新を参照
+      await safeReply(event.replyToken, buildFinalConfirmFlex({
+        nickname,
+        gender: s2?.palm_gender || '',
+        ageGroup: s2?.palm_age_group || '',
+      }))
       return
     }
     await safeReply(event.replyToken, buildGuideFlex())
@@ -341,8 +357,14 @@ export async function handlePalm(event) {
       await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
       return
     }
-    // 再掲も Flex のみ
-    await safeReply(event.replyToken, buildFinalConfirmFlex())
+    // 再掲：常に最新プロフィール付きでFlexのみ
+    const nickname = await getLineDisplayName(userId)
+    const s2 = await loadSession(userId)
+    await safeReply(event.replyToken, buildFinalConfirmFlex({
+      nickname,
+      gender: s2?.palm_gender || '',
+      ageGroup: s2?.palm_age_group || '',
+    }))
     return
   }
 
