@@ -1,7 +1,7 @@
-// palm.mjs（置き換え版）
+// palm.mjs（完全版フル：大きいFlexボタンUX・案内はテキスト+横ボタン / 縦ボタンで各選択）
 
 import { supabase } from './supabaseClient.js'
-import { safeReply } from './lineClient.js'
+import { safeReply, push } from './lineClient.js'
 
 const SESSION_TABLE = 'user_sessions'
 
@@ -20,7 +20,7 @@ const PALM_AGE_TO_NUMBER = new Map([
   ['70代以上', 75],
 ])
 
-// 案内文
+// 案内の長文（まずテキストで全文表示 → 直後に横ボタンFlex）
 const PALM_INTRO_TEXT = [
   '✋ 手相診断のご案内 🌸',
   '',
@@ -46,22 +46,152 @@ const PALM_INTRO_TEXT = [
   '⏱ お届け：48時間以内',
   '',
   '✅ 進める場合は「承諾」を押してね（キャンセル可）',
-].join('\n')
+]
 
-/* =========================
-   Quick Reply 送信
-   ========================= */
-async function replyWithChoices(replyToken, text, choices = []) {
-  return safeReply(replyToken, {
-    type: 'text',
-    text,
-    quickReply: {
-      items: choices.map((c) => ({
-        type: 'action',
-        action: { type: 'message', label: c.label, text: c.text },
-      })),
+// ---------- Flex builders ----------
+
+// 案内：横並びの大きい色付きボタン（承諾 / はじめの画面へ）
+function buildIntroButtonsFlex() {
+  return {
+    type: 'flex',
+    altText: '手相診断を開始しますか？',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: '進める場合は「承諾」を押してね', size: 'md', wrap: true, weight: 'bold' },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            spacing: 'md',
+            margin: 'lg',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#4CAF50',
+                height: 'md',
+                action: { type: 'message', label: '承諾', text: '承諾' },
+              },
+              {
+                type: 'button',
+                style: 'secondary',
+                color: '#FF4081',
+                height: 'md',
+                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
+              },
+            ],
+          },
+        ],
+      },
+      styles: { body: { backgroundColor: '#FFF9FB' } },
     },
-  })
+  }
+}
+
+// 汎用：縦並びの大きい選択ボタン（押し間違い防止に余白）
+function buildVerticalButtonsFlex({ title, labels, color = '#81D4FA' }) {
+  return {
+    type: 'flex',
+    altText: title,
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: title, weight: 'bold', size: 'md' },
+          ...labels.map((label) => ([
+            {
+              type: 'button',
+              style: 'primary',
+              height: 'sm',
+              color,
+              action: { type: 'message', label, text: label },
+            },
+            { type: 'separator', margin: 'md', color: '#FFFFFF00' }, // 透明＝余白
+          ])).flat(),
+        ],
+      },
+      styles: { body: { backgroundColor: '#FFF9FB' } },
+    },
+  }
+}
+
+// HAND専用（左手/右手の説明テキスト付き）
+function buildHandFlex() {
+  return {
+    type: 'flex',
+    altText: '左手／右手どちらを診断する？',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: '左手／右手どちらを診断する？', weight: 'bold', size: 'md' },
+          { type: 'text', text: '・左手：先天傾向（生まれ持った性質）\n・右手：未来（今の状態・努力の結果）', wrap: true, size: 'sm' },
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'sm',
+            color: '#F59FB0',
+            action: { type: 'message', label: '左手', text: '左手' },
+          },
+          { type: 'separator', margin: 'md', color: '#FFFFFF00' },
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'sm',
+            color: '#F59FB0',
+            action: { type: 'message', label: '右手', text: '右手' },
+          },
+        ],
+      },
+      styles: { body: { backgroundColor: '#FFF9FB' } },
+    },
+  }
+}
+
+// 撮影ガイド + 「準備完了」ボタン
+function buildGuideFlex() {
+  return {
+    type: 'flex',
+    altText: '撮影ガイド',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: '📸 撮影ガイド', weight: 'bold', size: 'md' },
+          { type: 'text', text: '・手のひら全体が写るように\n・指先まで入れる\n・明るい場所でピントを合わせて', wrap: true },
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'md',
+            color: '#4CAF50',
+            action: { type: 'message', label: '準備完了', text: '準備完了' },
+          },
+        ],
+      },
+      styles: { body: { backgroundColor: '#FFF9FB' } },
+    },
+  }
 }
 
 /* =========================
@@ -69,14 +199,12 @@ async function replyWithChoices(replyToken, text, choices = []) {
    ========================= */
 export async function sendPalmistryIntro(event) {
   const userId = event.source?.userId
-  if (userId) {
-    await setSession(userId, { flow: 'palm', palm_step: 'PRICE' })
-  }
-  await replyWithChoices(event.replyToken, PALM_INTRO_TEXT, [
-    { label: '承諾', text: '承諾' },
-    { label: 'キャンセル', text: 'キャンセル' },
-    { label: '💌 はじめの画面へ', text: 'トークTOP' },
-  ])
+  if (userId) await setSession(userId, { flow: 'palm', palm_step: 'PRICE' })
+
+  // 1) 長文をまずテキストで
+  await safeReply(event.replyToken, PALM_INTRO_TEXT.join('\n'))
+  // 2) 直後に横並びボタンFlex（承諾 / はじめの画面へ）
+  if (userId) await push(userId, buildIntroButtonsFlex())
 }
 
 /* =========================
@@ -105,7 +233,7 @@ export async function handlePalm(event) {
   if (!(event.type === 'message' && event.message?.type === 'text')) return
 
   const raw = (event.message.text || '').trim().normalize('NFKC')
-  const tn = raw.replace(/\s+/g, '') // スペース除去版（“準備 完了”“ 左手 ”などにも対応）
+  const tn = raw.replace(/\s+/g, '') // “準備 完了”“ 左手 ”などにも対応
   const s = await loadSession(userId)
   const step = s?.palm_step || 'PRICE'
 
@@ -113,11 +241,11 @@ export async function handlePalm(event) {
   if (step === 'PRICE') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
       await setSession(userId, { palm_step: 'GENDER' })
-      await replyWithChoices(event.replyToken, '性別を教えてね', [
-        { label: '男性', text: '男性' },
-        { label: '女性', text: '女性' },
-        { label: 'その他', text: 'その他' },
-      ])
+      await safeReply(event.replyToken, buildVerticalButtonsFlex({
+        title: '性別を教えてね',
+        labels: ['男性', '女性', 'その他'],
+        color: '#B39DDB',
+      }))
       return
     }
     if (tn === 'キャンセル') {
@@ -125,11 +253,9 @@ export async function handlePalm(event) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
     }
-    await replyWithChoices(event.replyToken, '進める場合は「承諾」を押してね🌸', [
-      { label: '承諾', text: '承諾' },
-      { label: 'キャンセル', text: 'キャンセル' },
-      { label: '💌 はじめの画面へ', text: 'トークTOP' },
-    ])
+    // 迷い入力 → 案内再掲（テキスト + 横Flex）
+    await safeReply(event.replyToken, PALM_INTRO_TEXT.join('\n'))
+    await push(userId, buildIntroButtonsFlex())
     return
   }
 
@@ -137,30 +263,30 @@ export async function handlePalm(event) {
   if (step === 'GENDER') {
     const ok = ['男性', '女性', 'その他'].includes(tn)
     if (!ok) {
-      await replyWithChoices(event.replyToken, '性別を選んでね', [
-        { label: '男性', text: '男性' },
-        { label: '女性', text: '女性' },
-        { label: 'その他', text: 'その他' },
-      ])
+      await safeReply(event.replyToken, buildVerticalButtonsFlex({
+        title: '性別を選んでね',
+        labels: ['男性', '女性', 'その他'],
+        color: '#B39DDB',
+      }))
       return
     }
     await setSession(userId, { palm_step: 'AGE', palm_gender: tn })
-    await replyWithChoices(
-      event.replyToken,
-      '年代を選んでね',
-      PALM_AGE_OPTIONS.map((label) => ({ label, text: label }))
-    )
+    await safeReply(event.replyToken, buildVerticalButtonsFlex({
+      title: '年代を選んでね',
+      labels: PALM_AGE_OPTIONS,
+      color: '#81D4FA',
+    }))
     return
   }
 
   // AGE
   if (step === 'AGE') {
     if (!PALM_AGE_TO_NUMBER.has(tn)) {
-      await replyWithChoices(
-        event.replyToken,
-        '年代を選んでね',
-        PALM_AGE_OPTIONS.map((label) => ({ label, text: label }))
-      )
+      await safeReply(event.replyToken, buildVerticalButtonsFlex({
+        title: '年代を選んでね',
+        labels: PALM_AGE_OPTIONS,
+        color: '#81D4FA',
+      }))
       return
     }
     await setSession(userId, {
@@ -168,32 +294,18 @@ export async function handlePalm(event) {
       palm_age_group: tn,
       palm_age: PALM_AGE_TO_NUMBER.get(tn),
     })
-    await replyWithChoices(
-      event.replyToken,
-      '左手／右手どちらを診断する？\n- 左手：先天傾向（生まれ持った性質）\n- 右手：未来（今の状態・努力の結果）',
-      [
-        { label: '左手', text: '左手' },
-        { label: '右手', text: '右手' },
-      ]
-    )
+    await safeReply(event.replyToken, buildHandFlex())
     return
   }
 
   // HAND
   if (step === 'HAND') {
     if (!(tn === '左手' || tn === '右手')) {
-      await replyWithChoices(event.replyToken, '左手 か 右手 を選んでね', [
-        { label: '左手', text: '左手' },
-        { label: '右手', text: '右手' },
-      ])
+      await safeReply(event.replyToken, buildHandFlex())
       return
     }
     await setSession(userId, { palm_step: 'GUIDE', palm_hand: tn })
-    await replyWithChoices(
-      event.replyToken,
-      '📸 撮影ガイド\n・手のひら全体が写るように\n・指先まで入れる\n・明るい場所でピントを合わせて\n準備OKなら「準備完了」を押してね',
-      [{ label: '準備完了', text: '準備完了' }]
-    )
+    await safeReply(event.replyToken, buildGuideFlex())
     return
   }
 
@@ -204,15 +316,16 @@ export async function handlePalm(event) {
       await safeReply(event.replyToken, 'OK！画像を送ってください✋（1枚）')
       return
     }
-    await replyWithChoices(event.replyToken, '準備ができたら「準備完了」を押してね🌸', [
-      { label: '準備完了', text: '準備完了' },
-    ])
+    await safeReply(event.replyToken, buildGuideFlex())
     return
   }
 
   // WAIT_IMAGE / PENDING_RESULT などでテキストが来た場合
   if (step === 'WAIT_IMAGE' || step === 'PENDING_RESULT') {
-    await safeReply(event.replyToken, '今は画像をお待ちしています📸\n撮影ガイド：明るい場所で手のひら全体が入るように撮ってね！')
+    await safeReply(
+      event.replyToken,
+      '今は画像をお待ちしています📸\n撮影ガイド：明るい場所で手のひら全体が入るように撮ってね！'
+    )
     return
   }
 
@@ -222,7 +335,7 @@ export async function handlePalm(event) {
 }
 
 /* =========================
-   セッション I/O（palm系プロパティのみ変更）
+   セッション I/O（部分更新）
    ========================= */
 async function loadSession(userId) {
   const { data } = await supabase
@@ -232,9 +345,13 @@ async function loadSession(userId) {
     .maybeSingle()
   return data || { user_id: userId, flow: 'palm', palm_step: 'PRICE' }
 }
+
 async function setSession(userId, patch) {
   if (!userId) return
-  const row = await loadSession(userId)
-  const payload = { ...row, ...patch, updated_at: new Date().toISOString() }
-  await supabase.from(SESSION_TABLE).upsert(payload, { onConflict: 'user_id' })
+  await supabase
+    .from(SESSION_TABLE)
+    .upsert(
+      { user_id: userId, ...patch, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' }
+    )
 }
