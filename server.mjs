@@ -6,7 +6,7 @@ import express from 'express'
 import { messagingApi } from '@line/bot-sdk'
 
 import { safeReply } from './lineClient.js'
-import { handleAI } from './aiRouter.js'          // ai/palm/renai の通常処理をここに委譲
+import { handleAI } from './aiRouter.mjs'          // ai/palm/renai の通常処理をここに委譲
 import { isOpen, setOpen } from './featureFlags.js'
 
 const app = express()
