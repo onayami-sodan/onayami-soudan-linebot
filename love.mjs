@@ -1,4 +1,4 @@
-// love.mjs（回答テキスト化→送信→48時間案内まで実装・安定版）
+// love.mjs（回答テキスト化→送信→48時間案内まで実装・安定版：開始ループ修正）
 
 import { safeReply } from './lineClient.js'
 import { supabase } from './supabaseClient.js'
@@ -135,7 +135,7 @@ export async function handleLove(event) {
 
   const raw = (event.message.text || '').trim().normalize('NFKC')
   const t = raw
-  const tn = raw.replace(/\s+/g, '') // スペース除去版（「開 始」「 1 」なども拾う）
+  const tn = raw.replace(/\s+/g, '') // スペース除去
 
   const s = await loadSession(userId)
 
@@ -203,39 +203,43 @@ export async function handleLove(event) {
     return
   }
 
-  // Q
+  // Q（開始ループ修正：回答解釈を先、開始チェックは後）
   if (s?.love_step === 'Q') {
     const idx = s.love_idx ?? 0
 
-    // 最初だけ開始ボタン
-    if (idx === 0 && tn !== '開始') {
-      await replyWithChoices(event.replyToken, '準備OKなら「開始」を押してね✨', [{ label: '開始', text: '開始' }])
-      return
-    }
-    if (idx === 0 && tn === '開始') {
-      await sendNextLoveQuestion(event, s) // Q1 を提示
-      return
-    }
-
-    // 回答の受理
+    // まず「回答かどうか」を判定
     let pick = t
     const circled = { '①': '1', '②': '2', '③': '3', '④': '4' }
     if (circled[pick]) pick = circled[pick]
     if (!/^[1-4]$/.test(pick)) {
-      const prevQ = QUESTIONS[idx - 1] || QUESTIONS[idx]
-      const pos = prevQ?.choices?.findIndex((c) => c === t)
+      // Q0 のときは現在Qで照合、それ以外は直前Qで照合
+      const refQ = idx === 0 ? QUESTIONS[0] : (QUESTIONS[idx - 1] || QUESTIONS[idx])
+      const pos = refQ?.choices?.findIndex((c) => c === t)
       if (pos >= 0) pick = String(pos + 1)
     }
-    if (!/^[1-4]$/.test(pick)) {
-      // 無効入力 → 次の質問を再掲（直前の or 現在の）
-      await sendNextLoveQuestion(event, s)
+
+    if (/^[1-4]$/.test(pick)) {
+      // 有効回答 → 記録して次のQを出す
+      const answers = [...(s.love_answers || []), pick]
+      const nextIdx = idx + 1
+      await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
+      await sendNextLoveQuestion(event, { ...s, love_answers: answers, love_idx: nextIdx })
       return
     }
 
-    const answers = [...(s.love_answers || []), pick]
-    const nextIdx = idx + 1
-    await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
-    await sendNextLoveQuestion(event, { ...s, love_answers: answers, love_idx: nextIdx })
+    // 回答ではなかった → 最初だけ開始必須
+    if (idx === 0) {
+      if (tn === '開始') {
+        // love_idx は0のままでQ1を提示（回答は次のメッセージで受理）
+        await sendNextLoveQuestion(event, s)
+        return
+      }
+      await replyWithChoices(event.replyToken, '準備OKなら「開始」を押してね✨', [{ label: '開始', text: '開始' }])
+      return
+    }
+
+    // それ以外は次のQを再掲
+    await sendNextLoveQuestion(event, s)
     return
   }
 
@@ -250,7 +254,7 @@ async function loadSession(userId) {
   return data || { user_id: userId, flow: 'love40', love_step: 'PRICE', love_idx: 0 }
 }
 
-// ★競合に強い「部分更新」版（読み出し→マージをやめる）
+// ★競合に強い「部分更新」版
 async function setSession(userId, patch) {
   if (!userId) return
   await supabase
