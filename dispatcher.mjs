@@ -1,6 +1,6 @@
 /*
  =========================
-  dispatcher.mjs（本番運用向け｜メニュー即切替＋同義語対応＋flow永続化）
+  dispatcher.mjs（本番運用向け｜トップでも自由入力=AI返信）
  =========================
 */
 import { supabase } from './supabaseClient.js'
@@ -48,7 +48,7 @@ const ALIAS = new Map([
 
 export async function dispatchEvent(event) {
   try {
-    // 非テキストは palm フローのみ許可
+    // 画像・その他：手相フロー中のみ受け付け
     if (event.type === 'message' && event.message?.type !== 'text') {
       const flow = await getFlow(event.source?.userId)
       if (flow === 'palm') return handlePalm(event)
@@ -70,7 +70,7 @@ export async function dispatchEvent(event) {
       ALIAS.get(rawText) ||
       ALIAS.get(normalized)
 
-    // top 指示なら即復帰
+    // top 指示なら即復帰（トップ案内だけ返す）
     if (picked === 'top') {
       await setFlow(userId, 'idle')
       await safeReply(event.replyToken, ENTRY_TEXT)
@@ -80,7 +80,7 @@ export async function dispatchEvent(event) {
     // メニューからの即切替
     if (picked === 'ai') {
       await setFlow(userId, 'ai')
-      await sendAiIntro(event)
+      await sendAiIntro(event) // メニュー経由のときは案内を表示
       return
     }
     if (picked === 'palm') {
@@ -97,12 +97,14 @@ export async function dispatchEvent(event) {
     // 現在のフローで処理
     const flow = await getFlow(userId)
 
+    // ★ここが変更点：idle でも自由入力が来たら AI に渡す（フローも ai に遷移）
     if (flow === 'idle') {
-      await safeReply(event.replyToken, ENTRY_TEXT)
-      return
+      await setFlow(userId, 'ai')
+      return handleAI(event) // 案内文なしで即AI返信
     }
-    if (flow === 'ai')   return handleAI(event)
-    if (flow === 'palm') return handlePalm(event)
+
+    if (flow === 'ai')    return handleAI(event)
+    if (flow === 'palm')  return handlePalm(event)
     if (flow === 'love40') return handleLove(event)
 
     // 不明な状態は idle に戻す
@@ -110,8 +112,11 @@ export async function dispatchEvent(event) {
     await safeReply(event.replyToken, ENTRY_TEXT)
   } catch (err) {
     console.error('[DISPATCH ERROR]', err, { event })
-    // 返信に失敗してもプロセスは落とさない
-    try { if (event?.replyToken) await safeReply(event.replyToken, 'ごめんね 今うまく受け取れなかったみたい また送ってね🌷') } catch {}
+    try {
+      if (event?.replyToken) {
+        await safeReply(event.replyToken, 'ごめんね 今うまく受け取れなかったみたい また送ってね🌷')
+      }
+    } catch {}
   }
 }
 
