@@ -1,12 +1,13 @@
 /*
  =========================
-   love.mjs（完全版フル｜支払い方法＋最終承諾フロー込み）
+   love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋回答控えクリーン表示）
    - 案内：長文はテキストで全文表示 + 横並びの大きい色付きボタン（Flex）
    - 設問：縦並びの大きいボタン（Flex）
    - 回答テキストをそのまま送信（reply→push 切替で安定）
    - 開始ループ修正
    - 設問完了後：診断書作成は3,980円（税込）を明記して最終承諾
    - 承諾押下で「ありがとう！…48時間以内…」定型文を送信
+   - 回答控え：選択肢の括弧内メモ（全角/半角）をユーザー表示から除去
    - セッション保存は部分更新（upsert）
  =========================
 */
@@ -74,6 +75,11 @@ async function getLineDisplayName(userId) {
   } catch {
     return ''
   }
+}
+
+// ====== ユーザー表示のクリーンアップ（括弧内メモ除去：全角/半角） ======
+function cleanForUser(str = '') {
+  return str.replace(/（[^）]*）/g, '').replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim()
 }
 
 /* =========================
@@ -259,7 +265,9 @@ async function sendAnswersAsTextAndNotice(event, session) {
     const q = QUESTIONS[i]
     const a = answers[i]
     const idx = a ? Number(a) - 1 : -1
-    const choiceText = idx >= 0 ? q.choices[idx] : '(未回答)'
+    // ユーザー表示から括弧内メモを除去
+    const choiceRaw = idx >= 0 ? q.choices[idx] : ''
+    const choiceText = idx >= 0 ? cleanForUser(choiceRaw) : '(未回答)'
     lines.push(`Q${q.id}. ${q.text}`)
     lines.push(`→ 回答: ${a || '-'} : ${choiceText}`)
     lines.push('')
