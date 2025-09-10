@@ -98,7 +98,7 @@ async function handleEventSafely(event) {
             flow: 'idle',
             palm_step: null,
             love_step: null,
-            love_idx: null,
+            
             // 必要に応じて完全初期化したい場合は以下をアンコメント
             // count: 0,
             // messages: [],
