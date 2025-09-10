@@ -1,13 +1,11 @@
 /*
  =========================
-   love.mjs（完全版フル｜支払い方法＋最終承諾フロー込み）
-   - 案内：長文はテキストで全文表示 + 横並びの大きい色付きボタン（Flex）
-   - 設問：縦並びの大きいボタン（Flex）
-   - 回答テキストをそのまま送信（reply→push 切替で安定）
-   - 開始ループ修正
-   - 設問完了後：診断書作成は3,980円（税込）を明記して最終承諾
-   - 承諾押下で「ありがとう！…48時間以内…」定型文を送信
-   - セッション保存は部分更新（upsert）
+   love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋表示から（）除去）
+   - 案内：長文テキスト + 横並びボタン（Flex）
+   - 設問：縦ボタン（Flex）※質問文/選択肢の（）はユーザー表示から除去
+   - 設問完了後：3,980円（税込）の最終承諾 → 承諾で48h案内
+   - 回答控え：選択肢（必要なら質問文も）から（）を除去
+   - セッションは upsert（部分更新）
  =========================
 */
 
@@ -18,6 +16,13 @@ import { messagingApi } from '@line/bot-sdk'
 
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
+
+// ====== 起動時サニティチェック ======
+;(function sanityCheckQuestions() {
+  const n = QUESTIONS?.length || 0
+  const last = QUESTIONS?.[n - 1]
+  console.log('[QUESTIONS] count=', n, ' last.id=', last?.id, ' last.choices.len=', last?.choices?.length)
+})()
 
 // ====== 案内文（全文｜支払い方法入り） ======
 const LOVE_INTRO_TEXT = [
@@ -76,6 +81,15 @@ async function getLineDisplayName(userId) {
   }
 }
 
+// ====== ユーザー表示のクリーンアップ（括弧内メモ除去：全角/半角） ======
+function cleanForUser(str = '') {
+  return String(str)
+    .replace(/（[^）]*）/g, '')   // 全角（…）
+    .replace(/\([^)]*\)/g, '')    // 半角(...)
+    .replace(/\s+/g, ' ')         // 余分な空白を1つに
+    .trim()
+}
+
 /* =========================
    Flex builders
    ========================= */
@@ -110,11 +124,10 @@ function buildIntroButtonsFlex() {
               },
               {
                 type: 'button',
-                style: 'secondary', // 白地に枠線
-                color: '#FF4081',   // はじめの画面＝ピンク
+                style: 'secondary',
                 height: 'md',
                 action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              },
+              }, // ※ secondary に color は付けない（スキーマ準拠）
             ],
           },
         ],
@@ -124,12 +137,14 @@ function buildIntroButtonsFlex() {
   }
 }
 
-// 設問：縦ボタン（押し間違い防止で余白）
+// 設問：縦ボタン（押し間違い防止で余白）※表示はクリーン化
 function buildQuestionFlex(q) {
   const circledNums = ['①', '②', '③', '④']
+  const qText = cleanForUser(q.text)
+  const choiceLabels = q.choices.map((c) => cleanForUser(c))
   return {
     type: 'flex',
-    altText: `Q${q.id}. ${q.text}`,
+    altText: `Q${q.id}. ${qText}`,
     contents: {
       type: 'bubble',
       size: 'mega',
@@ -139,16 +154,16 @@ function buildQuestionFlex(q) {
         spacing: 'lg',
         paddingAll: '20px',
         contents: [
-          { type: 'text', text: `Q${q.id}. ${q.text}`, wrap: true, weight: 'bold', size: 'md' },
-          ...q.choices.map((c, i) => ([
+          { type: 'text', text: `Q${q.id}. ${qText}`, wrap: true, weight: 'bold', size: 'md' },
+          ...choiceLabels.map((label, i) => ([
             {
               type: 'button',
               style: 'primary',
               height: 'sm',
               color: '#F59FB0',
-              action: { type: 'message', label: `${circledNums[i]} ${c}`, text: String(i + 1) },
+              action: { type: 'message', label: `${circledNums[i]} ${label}`, text: String(i + 1) },
             },
-            { type: 'separator', margin: 'md', color: '#FFFFFF00' }, // 透明セパレータ＝実質余白
+            { type: 'separator', margin: 'md', color: '#FFFFFF00' },
           ])).flat(),
         ],
       },
@@ -189,10 +204,9 @@ function buildFinalConfirmFlex() {
               {
                 type: 'button',
                 style: 'secondary',
-                color: '#FF4081',
                 height: 'md',
                 action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              },
+              }, // ※ secondary に color は付けない
             ],
           },
         ],
@@ -208,27 +222,23 @@ function buildFinalConfirmFlex() {
 export async function sendLove40Intro(event) {
   const userId = event.source?.userId
   if (userId) await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
-
-  // 1) 案内長文はテキストで全文表示
   await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
-  // 2) 直後に横並びボタンのFlexを表示
   await push(userId, buildIntroButtonsFlex())
 }
 
 /* =========================
-   設問出題（Flex縦ボタン）
+   設問出題（Flex縦ボタン）＋最終承諾への遷移
    ========================= */
 async function sendNextLoveQuestion(event, session) {
   const idx = session.love_idx ?? 0
-  if (idx >= QUESTIONS.length) {
-    // 設問が終わったら、まず最終承諾へ誘導
+  if (idx >= (QUESTIONS?.length || 0)) {
     const userId = event.source?.userId
     await setSession(userId, { love_step: 'CONFIRM_PAY' })
     await safeReply(
       event.replyToken,
       '🧾 最終確認\n' +
-        'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-        '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+      'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+      '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
     )
     await push(userId, buildFinalConfirmFlex())
     return true
@@ -259,23 +269,21 @@ async function sendAnswersAsTextAndNotice(event, session) {
     const q = QUESTIONS[i]
     const a = answers[i]
     const idx = a ? Number(a) - 1 : -1
-    const choiceText = idx >= 0 ? q.choices[idx] : '(未回答)'
-    lines.push(`Q${q.id}. ${q.text}`)
+    const qText = cleanForUser(q.text)
+    const choiceRaw = idx >= 0 ? q.choices[idx] : ''
+    const choiceText = idx >= 0 ? cleanForUser(choiceRaw) : '(未回答)'
+    lines.push(`Q${q.id}. ${qText}`)
     lines.push(`→ 回答: ${a || '-'} : ${choiceText}`)
     lines.push('')
   }
 
-  const txt = lines.join('\n')
+  await replyThenPush(userId, event.replyToken, lines.join('\n'))
 
-  // reply→push で確実に送信
-  await replyThenPush(userId, event.replyToken, txt)
-
-  // 48h案内（指定文言）
   await push(
     userId,
     '💌 ありがとう！回答を受け取ったよ\n' +
-      '48時間以内に「恋愛診断書」のURLをLINEでお届けするね\n' +
-      '順番に作成しているので、もうちょっと待っててね💛'
+    '48時間以内に「恋愛診断書」のURLをLINEでお届けするね\n' +
+    '順番に作成しているので、もうちょっと待っててね💛'
   )
 }
 
@@ -289,7 +297,7 @@ export async function handleLove(event) {
 
   const raw = (event.message.text || '').trim().normalize('NFKC')
   const t = raw
-  const tn = raw.replace(/\s+/g, '') // スペース除去
+  const tn = raw.replace(/\s+/g, '')
 
   const s = await loadSession(userId)
 
@@ -297,8 +305,6 @@ export async function handleLove(event) {
   if (s?.love_step === 'PRICE') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
       await setSession(userId, { love_step: 'PROFILE_GENDER', love_profile: {}, love_answers: [], love_idx: 0 })
-
-      // 性別選択（Flex縦ボタン）
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '性別を選んでね',
@@ -314,18 +320,13 @@ export async function handleLove(event) {
               { type: 'text', text: '性別を選んでね', weight: 'bold', size: 'md' },
               ...['女性', '男性', 'その他'].map((label) => ([
                 {
-                  type: 'button',
-                  style: 'primary',
-                  height: 'sm',
-                  color: '#B39DDB',
+                  type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
                   action: { type: 'message', label, text: label },
                 },
                 { type: 'separator', margin: 'md', color: '#FFFFFF00' },
               ])).flat(),
               {
-                type: 'button',
-                style: 'secondary',
-                height: 'md',
+                type: 'button', style: 'secondary', height: 'md',
                 action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
               },
             ],
@@ -339,7 +340,6 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
     }
-    // 迷い入力 → 案内を再掲
     await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
     await push(userId, buildIntroButtonsFlex())
     return
@@ -359,10 +359,7 @@ export async function handleLove(event) {
             layout: 'vertical',
             spacing: 'md',
             contents: ['女性', '男性', 'その他'].map((label) => ({
-              type: 'button',
-              style: 'primary',
-              height: 'sm',
-              color: '#B39DDB',
+              type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
               action: { type: 'message', label, text: label },
             })),
           },
@@ -373,7 +370,7 @@ export async function handleLove(event) {
     const profile = { ...(s.love_profile || {}), gender: t }
     await setSession(userId, { love_step: 'PROFILE_AGE', love_profile: profile })
 
-    // 年代選択（Flex縦ボタン）
+    // 年代選択
     const ages = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
     await safeReply(event.replyToken, {
       type: 'flex',
@@ -390,10 +387,7 @@ export async function handleLove(event) {
             { type: 'text', text: '年代を選んでね', weight: 'bold', size: 'md' },
             ...ages.map((label) => ([
               {
-                type: 'button',
-                style: 'primary',
-                height: 'sm',
-                color: '#81D4FA',
+                type: 'button', style: 'primary', height: 'sm', color: '#81D4FA',
                 action: { type: 'message', label, text: label },
               },
               { type: 'separator', margin: 'md', color: '#FFFFFF00' },
@@ -409,7 +403,6 @@ export async function handleLove(event) {
   if (s?.love_step === 'PROFILE_AGE') {
     const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
     if (!okAges.includes(t)) {
-      const ages = okAges
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '年代を選んでね',
@@ -419,11 +412,8 @@ export async function handleLove(event) {
             type: 'box',
             layout: 'vertical',
             spacing: 'md',
-            contents: ages.map((label) => ({
-              type: 'button',
-              style: 'primary',
-              height: 'sm',
-              color: '#81D4FA',
+            contents: okAges.map((label) => ({
+              type: 'button', style: 'primary', height: 'sm', color: '#81D4FA',
               action: { type: 'message', label, text: label },
             })),
           },
@@ -434,7 +424,7 @@ export async function handleLove(event) {
     const profile = { ...(s.love_profile || {}), age: t }
     await setSession(userId, { love_step: 'Q', love_profile: profile, love_idx: 0, love_answers: [] })
 
-    // 「開始」ボタン（縦1ボタン）
+    // 「開始」ボタン
     await safeReply(event.replyToken, {
       type: 'flex',
       altText: '準備OKなら開始を押してね',
@@ -448,13 +438,8 @@ export async function handleLove(event) {
           paddingAll: '20px',
           contents: [
             { type: 'text', text: 'ありがとう🌸 このあと少しずつ質問するね。準備OKなら「開始」を押してね', wrap: true },
-            {
-              type: 'button',
-              style: 'primary',
-              height: 'md',
-              color: '#4CAF50',
-              action: { type: 'message', label: '開始', text: '開始' },
-            },
+            { type: 'button', style: 'primary', height: 'md', color: '#4CAF50',
+              action: { type: 'message', label: '開始', text: '開始' } },
           ],
         },
       },
@@ -468,11 +453,11 @@ export async function handleLove(event) {
 
     // 回答の解釈（〇囲み/全角数字も拾う）
     let pick = t
-    const circled = { '①': '1', '②': '2', '③': '3', '④': '4', '１': '1', '２': '2', '３': '3', '４': '4' }
+    const circled = { '①':'1','②':'2','③':'3','④':'4','１':'1','２':'2','３':'3','４':'4' }
     if (circled[pick]) pick = circled[pick]
     if (!/^[1-4]$/.test(pick)) {
       const refQ = idx === 0 ? QUESTIONS[0] : (QUESTIONS[idx - 1] || QUESTIONS[idx])
-      const pos = refQ?.choices?.findIndex((c) => c === t)
+      const pos = refQ?.choices?.findIndex((c) => cleanForUser(c) === t || c === t)
       if (pos >= 0) pick = String(pos + 1)
     }
 
@@ -480,6 +465,20 @@ export async function handleLove(event) {
       const answers = [...(s.love_answers || []), pick]
       const nextIdx = idx + 1
       await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
+
+      // ▼ 保険：次の設問が存在しなければ最終承諾へ
+      if (!QUESTIONS[nextIdx]) {
+        await setSession(userId, { love_step: 'CONFIRM_PAY' })
+        await safeReply(
+          event.replyToken,
+          '🧾 最終確認\n' +
+          'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+          '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+        )
+        await push(userId, buildFinalConfirmFlex())
+        return
+      }
+
       await sendNextLoveQuestion(event, { ...s, love_answers: answers, love_idx: nextIdx })
       return
     }
@@ -490,7 +489,6 @@ export async function handleLove(event) {
         await sendNextLoveQuestion(event, s)
         return
       }
-      // 開始ボタンを再掲
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '準備OKなら開始を押してね',
@@ -518,7 +516,6 @@ export async function handleLove(event) {
   // 最終承諾フロー
   if (s?.love_step === 'CONFIRM_PAY') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
-      // 回答控え＋48h案内 → DONE
       await sendAnswersAsTextAndNotice(event, s)
       await setSession(userId, { flow: 'idle', love_step: 'DONE' })
       return
@@ -528,12 +525,11 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
       return
     }
-    // 迷い入力 → 再度最終確認を掲示
     await safeReply(
       event.replyToken,
       '🧾 最終確認\n' +
-        'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-        '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
+      'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
+      '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
     )
     await push(userId, buildFinalConfirmFlex())
     return
