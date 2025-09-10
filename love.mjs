@@ -275,11 +275,17 @@ export async function handleLove(event) {
   const userId = event.source?.userId
   if (!userId) return
 
+  // ▼ 重複防止（同一メッセージIDの再送を弾く）
+  const msgId = event.message?.id || ''
+  const s0 = await loadSession(userId)
+  if (s0?.last_msg_id === msgId) return
+  await setSession(userId, { last_msg_id: msgId })
+
   const raw = (event.message.text || '').trim().normalize('NFKC')
   const t = raw
   const tn = raw.replace(/\s+/g, '')
 
-  const s = await loadSession(userId)
+  const s = s0 || { user_id: userId, flow: 'love40', love_step: 'PRICE', love_idx: 0 }
 
   // PRICE
   if (s?.love_step === 'PRICE') {
@@ -381,7 +387,7 @@ export async function handleLove(event) {
   // PROFILE_AGE
   if (s?.love_step === 'PROFILE_AGE') {
     const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
-    if (!okAges.includes(t)) {
+    if (!okAges.includes(tn)) {
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '年代を選んでね',
@@ -400,13 +406,13 @@ export async function handleLove(event) {
       })
       return
     }
-    const profile = { ...(s.love_profile || {}), age: t }
+    const profile = { ...(s.love_profile || {}), age: tn }
     await setSession(userId, {
       love_step: 'Q',
       love_profile: profile,
       love_idx: 0,
       love_answers: [],
-      love_answered_map: {}, // ← 追加：回答済み管理
+      love_answered_map: {}, // 回答済み管理
     })
 
     // 「開始」ボタン
@@ -438,6 +444,12 @@ export async function handleLove(event) {
     const currentQ = QUESTIONS[idx]
     if (!currentQ) { await sendNextLoveQuestion(event, s); return }
 
+    // 「開始」押下 → 必ずQ1表示
+    if (tn === '開始') {
+      await sendNextLoveQuestion(event, s)
+      return
+    }
+
     const answeredMap = s.love_answered_map || {}
 
     // 新形式: "Q{ID}-{n}"
@@ -462,9 +474,13 @@ export async function handleLove(event) {
       qid = currentQ.id
     }
 
-    // 表示中のIDと一致 ＆ 未回答？
-    if (qid !== currentQ.id || !/^[1-4]$/.test(pick)) return
-    if (answeredMap[String(qid)]) return // 二度押し・重複は無視
+    // 表示中のIDと一致 ＆ 未回答？（ここで二重押し無効化）
+    if (qid !== currentQ.id || !/^[1-4]$/.test(pick)) {
+      // 認識できない入力 → 現在のQを再掲
+      await sendNextLoveQuestion(event, s)
+      return
+    }
+    if (answeredMap[String(qid)]) return
 
     // 採用
     const answers = [...(s.love_answers || []), pick]
