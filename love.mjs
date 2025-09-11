@@ -1,9 +1,10 @@
 /*
  =========================
    love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋表示から（）除去）
+   ※ 要望対応：最終承諾の青いテキスト吹き出しを完全に削除（Flexのみ送信）
    - 案内：長文テキスト + 横並びボタン（Flex）
    - 設問：縦ボタン（Flex）※質問文/選択肢の（）はユーザー表示から除去
-   - 設問完了後：3,980円（税込）の最終承諾 → 承諾で48h案内
+   - 設問完了後：3,980円（税込）の最終承諾 → Flexのみで表示（テキスト送信なし）
    - 回答控え：選択肢（必要なら質問文も）から（）を除去
    - セッションは upsert（部分更新）
  =========================
@@ -127,7 +128,7 @@ function buildIntroButtonsFlex() {
                 style: 'secondary',
                 height: 'md',
                 action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              }, // ※ secondary に color は付けない（スキーマ準拠）
+              }, // secondary に color は付けない
             ],
           },
         ],
@@ -172,7 +173,7 @@ function buildQuestionFlex(q) {
   }
 }
 
-// 最終承諾：横並びボタン（承諾 / トークTOP）
+// 最終承諾：横並びボタン（承諾 / トークTOP）※テキスト吹き出しは送らない
 function buildFinalConfirmFlex() {
   return {
     type: 'flex',
@@ -194,19 +195,8 @@ function buildFinalConfirmFlex() {
             spacing: 'md',
             margin: 'lg',
             contents: [
-              {
-                type: 'button',
-                style: 'primary',
-                color: '#4CAF50',
-                height: 'md',
-                action: { type: 'message', label: '承諾', text: '承諾' },
-              },
-              {
-                type: 'button',
-                style: 'secondary',
-                height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              }, // ※ secondary に color は付けない
+              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md', action: { type: 'message', label: '承諾', text: '承諾' } },
+              { type: 'button', style: 'secondary', height: 'md', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         ],
@@ -234,13 +224,8 @@ async function sendNextLoveQuestion(event, session) {
   if (idx >= (QUESTIONS?.length || 0)) {
     const userId = event.source?.userId
     await setSession(userId, { love_step: 'CONFIRM_PAY' })
-    await safeReply(
-      event.replyToken,
-      '🧾 最終確認\n' +
-      'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-      '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
-    )
-    await push(userId, buildFinalConfirmFlex())
+    // ★ テキスト送らず、Flexのみ
+    await safeReply(event.replyToken, buildFinalConfirmFlex())
     return true
   }
   const q = QUESTIONS[idx]
@@ -319,16 +304,10 @@ export async function handleLove(event) {
             contents: [
               { type: 'text', text: '性別を選んでね', weight: 'bold', size: 'md' },
               ...['男性', '女性', 'その他'].map((label) => ([
-                {
-                  type: 'button', style: 'primary', height: 'sm', color: '#B39DDB',
-                  action: { type: 'message', label, text: label },
-                },
+                { type: 'button', style: 'primary', height: 'sm', color: '#B39DDB', action: { type: 'message', label, text: label } },
                 { type: 'separator', margin: 'md', color: '#FFFFFF00' },
               ])).flat(),
-              {
-                type: 'button', style: 'secondary', height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              },
+              { type: 'button', style: 'secondary', height: 'md', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         },
@@ -386,10 +365,7 @@ export async function handleLove(event) {
           contents: [
             { type: 'text', text: '年代を選んでね', weight: 'bold', size: 'md' },
             ...ages.map((label) => ([
-              {
-                type: 'button', style: 'primary', height: 'sm', color: '#81D4FA',
-                action: { type: 'message', label, text: label },
-              },
+              { type: 'button', style: 'primary', height: 'sm', color: '#81D4FA', action: { type: 'message', label, text: label } },
               { type: 'separator', margin: 'md', color: '#FFFFFF00' },
             ])).flat(),
           ],
@@ -438,8 +414,7 @@ export async function handleLove(event) {
           paddingAll: '20px',
           contents: [
             { type: 'text', text: 'ありがとう🌸 このあと少しずつ質問するね。準備OKなら「開始」を押してね', wrap: true },
-            { type: 'button', style: 'primary', height: 'md', color: '#4CAF50',
-              action: { type: 'message', label: '開始', text: '開始' } },
+            { type: 'button', style: 'primary', height: 'md', color: '#4CAF50', action: { type: 'message', label: '開始', text: '開始' } },
           ],
         },
       },
@@ -466,16 +441,10 @@ export async function handleLove(event) {
       const nextIdx = idx + 1
       await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
 
-      // ▼ 保険：次の設問が存在しなければ最終承諾へ
+      // ▼ 次の設問が存在しなければ最終承諾へ（Flexのみ）
       if (!QUESTIONS[nextIdx]) {
         await setSession(userId, { love_step: 'CONFIRM_PAY' })
-        await safeReply(
-          event.replyToken,
-          '🧾 最終確認\n' +
-          'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-          '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
-        )
-        await push(userId, buildFinalConfirmFlex())
+        await safeReply(event.replyToken, buildFinalConfirmFlex())
         return
       }
 
@@ -513,7 +482,7 @@ export async function handleLove(event) {
     return
   }
 
-  // 最終承諾フロー
+  // 最終承諾フロー（常にFlexのみ送信）
   if (s?.love_step === 'CONFIRM_PAY') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
       await sendAnswersAsTextAndNotice(event, s)
@@ -525,13 +494,8 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
       return
     }
-    await safeReply(
-      event.replyToken,
-      '🧾 最終確認\n' +
-      'このあとの「診断書の作成・納品」には **3,980円（税込）** が必要です。\n' +
-      '承諾する場合は［承諾］、やめる場合は［💌 はじめの画面へ］を押してね。'
-    )
-    await push(userId, buildFinalConfirmFlex())
+    // ★ テキスト送らず、Flexのみ
+    await safeReply(event.replyToken, buildFinalConfirmFlex())
     return
   }
 
