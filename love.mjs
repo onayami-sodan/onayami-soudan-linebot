@@ -17,22 +17,29 @@ import { supabase } from './supabaseClient.js'
 import { QUESTIONS } from './questions.js'
 import { messagingApi } from '@line/bot-sdk'
 
+/* =========================
+   定数
+   ========================= */
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
 
-// TXT保存先（Supabase Storage）
-const ANSWERS_BUCKET = 'answers'            // 例: 'answers'
-const ANSWERS_PREFIX = 'answers/renai'      // 例: 'answers/renai'
-const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7 // 7日（604,800秒）
+// Supabase Storage
+const ANSWERS_BUCKET = 'answers'            // バケット名（非公開）
+const ANSWERS_PREFIX = 'answers/renai'      // 疑似フォルダ
+const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7 // 7日（604800秒）
 
-// ====== 起動時サニティチェック ======
+/* =========================
+   起動時ログ
+   ========================= */
 ;(function sanityCheckQuestions() {
   const n = QUESTIONS?.length || 0
   const last = QUESTIONS?.[n - 1]
   console.log('[QUESTIONS] count=', n, ' last.id=', last?.id, ' last.choices.len=', last?.choices?.length)
 })()
 
-// ====== 案内文（全文｜支払い方法入り） ======
+/* =========================
+   文面
+   ========================= */
 const LOVE_INTRO_TEXT = [
   '💘 恋愛診断書（40問）ご案内',
   '',
@@ -61,7 +68,9 @@ const LOVE_INTRO_TEXT = [
   '✅ 進める場合は「承諾」を押してね（キャンセル可）',
 ]
 
-// ====== 長文分割送信（1通目 reply、2通目以降 push） ======
+/* =========================
+   共通ユーティリティ
+   ========================= */
 function splitChunks(text, size = 4500) {
   const out = []
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size))
@@ -72,12 +81,9 @@ async function replyThenPush(userId, replyToken, bigText) {
   const chunks = splitChunks(bigText, 4500)
   if (chunks.length === 0) return
   await safeReply(replyToken, chunks[0]) // 1通目 reply
-  for (let i = 1; i < chunks.length; i++) {
-    await push(userId, chunks[i])        // 2通目以降 push
-  }
+  for (let i = 1; i < chunks.length; i++) await push(userId, chunks[i]) // 2通目以降 push
 }
 
-// ====== LINEニックネーム ======
 async function getLineDisplayName(userId) {
   try {
     if (!LINE_ACCESS_TOKEN || !userId) return ''
@@ -89,21 +95,34 @@ async function getLineDisplayName(userId) {
   }
 }
 
-// ====== 表示/保存用のクリーンアップ（括弧内メモ除去：全角/半角） ======
 function cleanForUser(str = '') {
   return String(str)
     .replace(/（[^）]*）/g, '')   // 全角（…）
     .replace(/\([^)]*\)/g, '')    // 半角(...)
-    .replace(/\s+/g, ' ')         // 余分な空白を1つに
+    .replace(/\s+/g, ' ')         // 連続空白trim
     .trim()
 }
 
-// ====== ファイル名・パス用のサニタイズ ======
 function safeName(s = '') {
   return String(s).replace(/[\/:*?"<>|\s]+/g, '')
 }
 
-// ====== TXT生成（質問文/選択肢とも（）除去の体裁） ======
+/* =========================
+   Storage 保険（バケット自動作成）
+   ========================= */
+async function ensureBucketExists(bucket) {
+  const { data: buckets, error: listErr } = await supabase.storage.listBuckets()
+  if (listErr) throw listErr
+  if (!buckets?.some(b => b.name === bucket)) {
+    const { error: createErr } = await supabase.storage.createBucket(bucket, { public: false })
+    if (createErr) throw createErr
+    console.log(`[storage] bucket created: ${bucket}`)
+  }
+}
+
+/* =========================
+   TXT生成・保存・署名URL
+   ========================= */
 function buildAnswersTxt({ nickname = '', gender = '', ageRange = '', ageExact = '', answers = [] }) {
   const lines = []
   lines.push('---')
@@ -128,20 +147,18 @@ function buildAnswersTxt({ nickname = '', gender = '', ageRange = '', ageExact =
       lines.push('')
     }
   }
-
-  addBlock(1, 10)
-  addBlock(11, 20)
-  addBlock(21, 30)
-  addBlock(31, 40)
+  addBlock(1, 10); addBlock(11, 20); addBlock(21, 30); addBlock(31, 40)
 
   lines.push('---')
   lines.push(`（生成日時: ${new Date().toLocaleString()}）`)
   return lines.join('\n')
 }
 
-// ====== TXTをStorageへ保存 → 7日署名URLを取得 ======
 async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageRange = '', ageExact = '', answers = [] }) {
   if (!userId) throw new Error('userIdが空')
+
+  // バケット無ければ作る
+  await ensureBucketExists(ANSWERS_BUCKET)
 
   const txt = buildAnswersTxt({ nickname, gender, ageRange, ageExact, answers })
   const iso = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
@@ -150,19 +167,15 @@ async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageR
   const file = `maruhada_40q_${iso}${tagG}${tagA}.txt`
   const key = `${ANSWERS_PREFIX}/${safeName(userId)}/${file}`
 
-  const body =
-    (typeof Blob !== 'undefined')
-      ? new Blob([txt], { type: 'text/plain; charset=utf-8' })
-      : Buffer.from(txt, 'utf-8')
+  const body = (typeof Blob !== 'undefined')
+    ? new Blob([txt], { type: 'text/plain; charset=utf-8' })
+    : Buffer.from(txt, 'utf-8')
 
-  const { error: upErr } = await supabase
-    .storage
-    .from(ANSWERS_BUCKET)
+  const { error: upErr } = await supabase.storage.from(ANSWERS_BUCKET)
     .upload(key, body, { upsert: true, contentType: 'text/plain; charset=utf-8' })
   if (upErr) throw upErr
 
-  const { data: signed, error: signErr } = await supabase
-    .storage
+  const { data: signed, error: signErr } = await supabase.storage
     .from(ANSWERS_BUCKET)
     .createSignedUrl(key, SIGNED_URL_TTL_SEC)
   if (signErr) throw signErr
@@ -170,7 +183,9 @@ async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageR
   return { signedUrl: signed?.signedUrl || '', path: key, filename: file }
 }
 
-// ====== ダウンロード用Flex（ボタンのみ・見やすい） ======
+/* =========================
+   Flex builders
+   ========================= */
 function buildDownloadFlex({ url, filename }) {
   return {
     type: 'flex',
@@ -186,13 +201,7 @@ function buildDownloadFlex({ url, filename }) {
         contents: [
           { type: 'text', text: '回答控え（TXT）', weight: 'bold', size: 'md' },
           { type: 'text', text: '7日間有効のダウンロードリンクを発行しました', size: 'sm', wrap: true },
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'md',
-            color: '#4CAF50',
-            action: { type: 'uri', label: 'ダウンロード', uri: url },
-          },
+          { type: 'button', style: 'primary', height: 'md', color: '#4CAF50', action: { type: 'uri', label: 'ダウンロード', uri: url } },
           { type: 'text', text: filename, size: 'xs', color: '#6b7280', wrap: true },
         ],
       },
@@ -201,9 +210,6 @@ function buildDownloadFlex({ url, filename }) {
   }
 }
 
-/* =========================
-   Flex builders（案内/設問/最終承諾）
-   ========================= */
 function buildIntroButtonsFlex() {
   return {
     type: 'flex',
@@ -296,7 +302,7 @@ function buildFinalConfirmFlex() {
 }
 
 /* =========================
-   公開: 案内文表示（ここで初期化）
+   公開関数：導線
    ========================= */
 export async function sendLove40Intro(event) {
   const userId = event.source?.userId
@@ -306,14 +312,14 @@ export async function sendLove40Intro(event) {
 }
 
 /* =========================
-   設問出題（Flex縦ボタン）＋最終承諾への遷移
+   質問出題
    ========================= */
 async function sendNextLoveQuestion(event, session) {
   const idx = session.love_idx ?? 0
   if (idx >= (QUESTIONS?.length || 0)) {
     const userId = event.source?.userId
     await setSession(userId, { love_step: 'CONFIRM_PAY' })
-    // ★ テキスト送らず、Flexのみ
+    // テキストは送らず Flex のみ
     await safeReply(event.replyToken, buildFinalConfirmFlex())
     return true
   }
@@ -323,7 +329,7 @@ async function sendNextLoveQuestion(event, session) {
 }
 
 /* =========================
-   診断完了 → TXT化/保存/7日URL返信（Flex＋テキスト）
+   診断完了：TXT化→保存→7日URL返信
    ========================= */
 async function sendAnswersTxtUrlAndNotice(event, session) {
   const userId = event.source?.userId
@@ -332,17 +338,15 @@ async function sendAnswersTxtUrlAndNotice(event, session) {
   const answers = session.love_answers || []
 
   try {
-    // 1) 保存＆署名URL
     const { signedUrl, filename } = await saveTxtAndGetSignedUrl({
       userId,
       nickname,
       gender: profile.gender || '',
       ageRange: profile.age || '',
-      ageExact: '', // 必要に応じてexact年齢を入れる
+      ageExact: '', // 必要に応じて exact 年齢を持たせるならここに
       answers,
     })
 
-    // 2) テキストで案内（URLを明示）
     await safeReply(
       event.replyToken,
       [
@@ -357,12 +361,8 @@ async function sendAnswersTxtUrlAndNotice(event, session) {
       ].join('\n')
     )
 
-    // 3) Flexでもボタン提示（端末互換）
     await push(userId, buildDownloadFlex({ url: signedUrl, filename }))
-
-    // 4) 最終メッセージ（任意）
     await push(userId, '受け取りありがとう🌸 診断書の完成まで少し待っててね')
-
   } catch (e) {
     console.error('[saveTxtAndGetSignedUrl] error:', e)
     await safeReply(
@@ -373,7 +373,7 @@ async function sendAnswersTxtUrlAndNotice(event, session) {
 }
 
 /* =========================
-   恋愛フロー本体
+   メインフロー
    ========================= */
 export async function handleLove(event) {
   if (!(event.type === 'message' && event.message?.type === 'text')) return
@@ -381,8 +381,8 @@ export async function handleLove(event) {
   if (!userId) return
 
   const raw = (event.message.text || '').trim().normalize('NFKC')
-  const t = raw
-  const tn = raw.replace(/\s+/g, '')
+  const t  = raw
+  const tn = raw.replace(/\s+/g, '') // 空白全除去
 
   const s = await loadSession(userId)
 
@@ -446,7 +446,7 @@ export async function handleLove(event) {
       })
       return
     }
-    const profile = { ...(s.love_profile || {}), gender: t }
+    const profile = { ...(s.love_profile || {}), gender: tn } // ← tn を保存
     await setSession(userId, { love_step: 'PROFILE_AGE', love_profile: profile })
 
     // 年代選択
@@ -478,7 +478,7 @@ export async function handleLove(event) {
   // PROFILE_AGE
   if (s?.love_step === 'PROFILE_AGE') {
     const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
-    if (!okAges.includes(t)) {
+    if (!okAges.includes(tn)) { // ← tn で判定
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '年代を選んでね',
@@ -497,7 +497,7 @@ export async function handleLove(event) {
       })
       return
     }
-    const profile = { ...(s.love_profile || {}), age: t }
+    const profile = { ...(s.love_profile || {}), age: tn } // ← tn を保存
     await setSession(userId, { love_step: 'Q', love_profile: profile, love_idx: 0, love_answers: [] })
 
     // 「開始」ボタン
@@ -541,7 +541,7 @@ export async function handleLove(event) {
       const nextIdx = idx + 1
       await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
 
-      // ▼ 次の設問が存在しなければ最終承諾へ（Flexのみ）
+      // 次の設問が無ければ最終承諾へ
       if (!QUESTIONS[nextIdx]) {
         await setSession(userId, { love_step: 'CONFIRM_PAY' })
         await safeReply(event.replyToken, buildFinalConfirmFlex())
@@ -582,11 +582,10 @@ export async function handleLove(event) {
     return
   }
 
-  // 最終承諾フロー（常にFlexのみ送信）
+  // 最終承諾（常にFlexのみ送信）
   if (s?.love_step === 'CONFIRM_PAY') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
-      // ▼ ここでTXT化→保存→7日URL返信
-      await sendAnswersTxtUrlAndNotice(event, s)
+      await sendAnswersTxtUrlAndNotice(event, s) // TXT作成→保存→7日URL返信
       await setSession(userId, { flow: 'idle', love_step: 'DONE' })
       return
     }
@@ -595,7 +594,6 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'はじめの画面に戻るね💌')
       return
     }
-    // ★ テキスト送らず、Flexのみ
     await safeReply(event.replyToken, buildFinalConfirmFlex())
     return
   }
