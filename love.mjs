@@ -1,9 +1,14 @@
 /*
  =========================
-   love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋表示から（）除去＋TXT化/保存/7日URL返信）
-   変更点：
-   - Supabase Storage へ保存するファイル名を ASCII セーフ化（日本語等で Invalid key を回避）
-   - バケット自動作成（存在しない場合）
+   love.mjs（完全差し替えフル｜支払い方法＋最終承諾フロー＋表示から（）除去＋TXT化/保存/7日URL返信）
+   確定仕様：
+   - Q完了後に注意吹き出しを表示
+     「質問の回答を間違えたり複数回タップしてしまった時は…『💌はじめの画面へ』からやり直してね🌸」
+   - 回答控え返信はテキストリンク1つだけ（FlexのDLカードは送らない）
+   - 「期限切れたら再発行します」は削除
+   - 最後は固定文で締める
+     「🌸受け取りありがとう🌸恋愛診断書は順番に作成してるので48時間以内にURLを送るね⭐」
+   - Supabase Storage：ASCIIセーフなファイル名／バケット自動作成
  =========================
 */
 
@@ -19,9 +24,9 @@ const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
 
 // Supabase Storage
-const ANSWERS_BUCKET = 'answers'                 // バケット名
-const ANSWERS_PREFIX = 'renai'                   // 疑似フォルダ（key の先頭）
-const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7      // 7日
+const ANSWERS_BUCKET = 'answers'
+const ANSWERS_PREFIX = 'renai'
+const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7 // 7日
 
 /* =========================
    起動時ログ
@@ -75,8 +80,8 @@ async function replyThenPush(userId, replyToken, bigText) {
   if (!bigText) return
   const chunks = splitChunks(bigText, 4500)
   if (chunks.length === 0) return
-  await safeReply(replyToken, chunks[0]) // 1通目 reply
-  for (let i = 1; i < chunks.length; i++) await push(userId, chunks[i]) // 2通目以降 push
+  await safeReply(replyToken, chunks[0])
+  for (let i = 1; i < chunks.length; i++) await push(userId, chunks[i])
 }
 
 async function getLineDisplayName(userId) {
@@ -90,21 +95,21 @@ async function getLineDisplayName(userId) {
   }
 }
 
-// 表示用クリーニング（括弧メモ除去）
+// 表示から括弧メモを除去
 function cleanForUser(str = '') {
   return String(str)
-    .replace(/（[^）]*）/g, '')   // 全角（…）
-    .replace(/\([^)]*\)/g, '')    // 半角(...)
+    .replace(/（[^）]*）/g, '')
+    .replace(/\([^)]*\)/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
-// ディレクトリ名・タグ向けの安全化（区切り／空白など除去）
+// 安全な名前化
 function safeName(s = '') {
   return String(s).replace(/[\/:*?"<>|\s]+/g, '')
 }
 
-// ファイル名（末尾）の ASCII セーフ化（非ASCIIを _ に）
+// ASCIIセーフなファイル名
 function safeFileName(name = '') {
   return String(name)
     .normalize('NFKD')
@@ -114,7 +119,7 @@ function safeFileName(name = '') {
 }
 
 /* =========================
-   Storage 保険（バケット自動作成）
+   Storage：バケット自動作成
    ========================= */
 async function ensureBucketExists(bucket) {
   const { data: buckets, error: listErr } = await supabase.storage.listBuckets()
@@ -170,11 +175,9 @@ async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageR
   const tagG = gender ? `_g-${safeName(gender)}` : ''
   const tagA = (ageExact || ageRange) ? `_a-${safeName(ageExact || ageRange)}` : ''
 
-  // ★ 日本語などが含まれても安全なファイル名に
   const rawFile = `maruhada_40q_${iso}${tagG}${tagA}.txt`
   const file    = safeFileName(rawFile)
 
-  // key は「疑似フォルダ/ユーザーID/ファイル名」
   const key = `${ANSWERS_PREFIX}/${safeName(userId)}/${file}`
 
   const body =
@@ -200,30 +203,6 @@ async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageR
 /* =========================
    Flex builders
    ========================= */
-function buildDownloadFlex({ url, filename }) {
-  return {
-    type: 'flex',
-    altText: '回答控え（TXT）をダウンロードできます',
-    contents: {
-      type: 'bubble',
-      size: 'mega',
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'lg',
-        paddingAll: '20px',
-        contents: [
-          { type: 'text', text: '回答控え（TXT）', weight: 'bold', size: 'md' },
-          { type: 'text', text: '7日間有効のダウンロードリンクを発行しました', size: 'sm', wrap: true },
-          { type: 'button', style: 'primary', height: 'md', color: '#4CAF50', action: { type: 'uri', label: 'ダウンロード', uri: url } },
-          { type: 'text', text: filename, size: 'xs', color: '#6b7280', wrap: true },
-        ],
-      },
-      styles: { body: { backgroundColor: '#FFF9FB' } },
-    },
-  }
-}
-
 function buildIntroButtonsFlex() {
   return {
     type: 'flex',
@@ -331,9 +310,17 @@ export async function sendLove40Intro(event) {
 async function sendNextLoveQuestion(event, session) {
   const idx = session.love_idx ?? 0
   if (idx >= (QUESTIONS?.length || 0)) {
-    const userId = event.source?.userId
-    await setSession(userId, { love_step: 'CONFIRM_PAY' })
-    await safeReply(event.replyToken, buildFinalConfirmFlex()) // テキストは送らず Flex のみ
+    // Q完了 → 注意吹き出し → 最終承諾
+    await safeReply(event.replyToken, [
+      {
+        type: 'text',
+        text:
+`質問の回答を間違えたり複数回タップしてしまった時は
+正確な診断ができないから💦
+『💌はじめの画面へ』からやり直してね🌸`,
+      },
+      buildFinalConfirmFlex(),
+    ])
     return true
   }
   const q = QUESTIONS[idx]
@@ -342,7 +329,7 @@ async function sendNextLoveQuestion(event, session) {
 }
 
 /* =========================
-   診断完了：TXT化→保存→7日URL返信
+   診断完了：TXT化→保存→7日URL返信（テキスト1リンクのみ）
    ========================= */
 async function sendAnswersTxtUrlAndNotice(event, session) {
   const userId = event.source?.userId
@@ -360,22 +347,16 @@ async function sendAnswersTxtUrlAndNotice(event, session) {
       answers,
     })
 
-    await safeReply(
-      event.replyToken,
-      [
-        '✅ 回答控え（TXT）を作成しました',
-        '7日間有効のダウンロードリンクはこちら',
-        signedUrl,
-        '',
-        '📦 ファイル名：' + filename,
-        '※ 期限が切れた場合は再発行します',
-        '',
-        '💡 診断書は48時間以内にお届けします（URLでご案内）',
-      ].join('\n')
-    )
+    const message =
+`✅ 回答控え（TXT）を作成しました
+ダウンロードリンクはこちら
+${signedUrl}
 
-    await push(userId, buildDownloadFlex({ url: signedUrl, filename }))
-    await push(userId, '受け取りありがとう🌸 診断書の完成まで少し待っててね')
+📂 ファイル名：${filename}
+
+🌸受け取りありがとう🌸恋愛診断書は順番に作成してるので48時間以内にURLを送るね⭐`
+
+    await replyThenPush(userId, event.replyToken, message)
   } catch (e) {
     console.error('[saveTxtAndGetSignedUrl] error:', e)
     await safeReply(
@@ -395,7 +376,7 @@ export async function handleLove(event) {
 
   const raw = (event.message.text || '').trim().normalize('NFKC')
   const t  = raw
-  const tn = raw.replace(/\s+/g, '') // 空白全除去
+  const tn = raw.replace(/\s+/g, '')
 
   const s = await loadSession(userId)
 
@@ -553,9 +534,18 @@ export async function handleLove(event) {
       const nextIdx = idx + 1
       await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
 
-      if (!QUESTIONS[nextIdx]) { // 次の設問なし → 最終承諾へ
+      if (!QUESTIONS[nextIdx]) {
         await setSession(userId, { love_step: 'CONFIRM_PAY' })
-        await safeReply(event.replyToken, buildFinalConfirmFlex())
+        await safeReply(event.replyToken, [
+          {
+            type: 'text',
+            text:
+`質問の回答を間違えたり複数回タップしてしまった時は
+正確な診断ができないから💦
+『💌はじめの画面へ』からやり直してね🌸`,
+          },
+          buildFinalConfirmFlex(),
+        ])
         return
       }
       await sendNextLoveQuestion(event, { ...s, love_answers: answers, love_idx: nextIdx })
@@ -592,10 +582,10 @@ export async function handleLove(event) {
     return
   }
 
-  // 最終承諾（常にFlexのみ送信）
+  // 最終承諾
   if (s?.love_step === 'CONFIRM_PAY') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
-      await sendAnswersTxtUrlAndNotice(event, s) // TXT作成→保存→7日URL返信
+      await sendAnswersTxtUrlAndNotice(event, s)
       await setSession(userId, { flow: 'idle', love_step: 'DONE' })
       return
     }
