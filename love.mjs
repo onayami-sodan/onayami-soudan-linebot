@@ -1,14 +1,9 @@
 /*
  =========================
    love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋表示から（）除去＋TXT化/保存/7日URL返信）
-   ※ 要望対応：
-     - 最終承諾の青いテキスト吹き出しを完全に削除（Flexのみ送信）
-     - 診断完了 → TXT化 → Supabaseに保存 → 7日有効の署名付きURLを返信（Flex＋テキスト）
-   - 案内：長文テキスト + 横並びボタン（Flex）
-   - 設問：縦ボタン（Flex）※質問文/選択肢の（）はユーザー表示から除去
-   - 設問完了後：3,980円（税込）の最終承諾 → Flexのみで表示（テキスト送信なし）
-   - 回答控えTXT：質問文/選択肢とも（）を除去した体裁で保存
-   - セッションは upsert（部分更新）
+   変更点：
+   - Supabase Storage へ保存するファイル名を ASCII セーフ化（日本語等で Invalid key を回避）
+   - バケット自動作成（存在しない場合）
  =========================
 */
 
@@ -24,9 +19,9 @@ const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
 
 // Supabase Storage
-const ANSWERS_BUCKET = 'answers'            // バケット名（非公開）
-const ANSWERS_PREFIX = 'renai'      // 疑似フォルダ
-const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7 // 7日（604800秒）
+const ANSWERS_BUCKET = 'answers'                 // バケット名
+const ANSWERS_PREFIX = 'renai'                   // 疑似フォルダ（key の先頭）
+const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7      // 7日
 
 /* =========================
    起動時ログ
@@ -95,16 +90,27 @@ async function getLineDisplayName(userId) {
   }
 }
 
+// 表示用クリーニング（括弧メモ除去）
 function cleanForUser(str = '') {
   return String(str)
     .replace(/（[^）]*）/g, '')   // 全角（…）
     .replace(/\([^)]*\)/g, '')    // 半角(...)
-    .replace(/\s+/g, ' ')         // 連続空白trim
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
+// ディレクトリ名・タグ向けの安全化（区切り／空白など除去）
 function safeName(s = '') {
   return String(s).replace(/[\/:*?"<>|\s]+/g, '')
+}
+
+// ファイル名（末尾）の ASCII セーフ化（非ASCIIを _ に）
+function safeFileName(name = '') {
+  return String(name)
+    .normalize('NFKD')
+    .replace(/[^\w.\-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
 }
 
 /* =========================
@@ -157,25 +163,33 @@ function buildAnswersTxt({ nickname = '', gender = '', ageRange = '', ageExact =
 async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageRange = '', ageExact = '', answers = [] }) {
   if (!userId) throw new Error('userIdが空')
 
-  // バケット無ければ作る
   await ensureBucketExists(ANSWERS_BUCKET)
 
   const txt = buildAnswersTxt({ nickname, gender, ageRange, ageExact, answers })
-  const iso = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
+  const iso  = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
   const tagG = gender ? `_g-${safeName(gender)}` : ''
   const tagA = (ageExact || ageRange) ? `_a-${safeName(ageExact || ageRange)}` : ''
-  const file = `maruhada_40q_${iso}${tagG}${tagA}.txt`
+
+  // ★ 日本語などが含まれても安全なファイル名に
+  const rawFile = `maruhada_40q_${iso}${tagG}${tagA}.txt`
+  const file    = safeFileName(rawFile)
+
+  // key は「疑似フォルダ/ユーザーID/ファイル名」
   const key = `${ANSWERS_PREFIX}/${safeName(userId)}/${file}`
 
-  const body = (typeof Blob !== 'undefined')
-    ? new Blob([txt], { type: 'text/plain; charset=utf-8' })
-    : Buffer.from(txt, 'utf-8')
+  const body =
+    (typeof Blob !== 'undefined')
+      ? new Blob([txt], { type: 'text/plain; charset=utf-8' })
+      : Buffer.from(txt, 'utf-8')
 
-  const { error: upErr } = await supabase.storage.from(ANSWERS_BUCKET)
+  const { error: upErr } = await supabase
+    .storage
+    .from(ANSWERS_BUCKET)
     .upload(key, body, { upsert: true, contentType: 'text/plain; charset=utf-8' })
   if (upErr) throw upErr
 
-  const { data: signed, error: signErr } = await supabase.storage
+  const { data: signed, error: signErr } = await supabase
+    .storage
     .from(ANSWERS_BUCKET)
     .createSignedUrl(key, SIGNED_URL_TTL_SEC)
   if (signErr) throw signErr
@@ -319,8 +333,7 @@ async function sendNextLoveQuestion(event, session) {
   if (idx >= (QUESTIONS?.length || 0)) {
     const userId = event.source?.userId
     await setSession(userId, { love_step: 'CONFIRM_PAY' })
-    // テキストは送らず Flex のみ
-    await safeReply(event.replyToken, buildFinalConfirmFlex())
+    await safeReply(event.replyToken, buildFinalConfirmFlex()) // テキストは送らず Flex のみ
     return true
   }
   const q = QUESTIONS[idx]
@@ -343,7 +356,7 @@ async function sendAnswersTxtUrlAndNotice(event, session) {
       nickname,
       gender: profile.gender || '',
       ageRange: profile.age || '',
-      ageExact: '', // 必要に応じて exact 年齢を持たせるならここに
+      ageExact: '',
       answers,
     })
 
@@ -446,7 +459,7 @@ export async function handleLove(event) {
       })
       return
     }
-    const profile = { ...(s.love_profile || {}), gender: tn } // ← tn を保存
+    const profile = { ...(s.love_profile || {}), gender: tn }
     await setSession(userId, { love_step: 'PROFILE_AGE', love_profile: profile })
 
     // 年代選択
@@ -478,7 +491,7 @@ export async function handleLove(event) {
   // PROFILE_AGE
   if (s?.love_step === 'PROFILE_AGE') {
     const okAges = ['10代未満','10代','20代','30代','40代','50代','60代','70代以上']
-    if (!okAges.includes(tn)) { // ← tn で判定
+    if (!okAges.includes(tn)) {
       await safeReply(event.replyToken, {
         type: 'flex',
         altText: '年代を選んでね',
@@ -497,10 +510,9 @@ export async function handleLove(event) {
       })
       return
     }
-    const profile = { ...(s.love_profile || {}), age: tn } // ← tn を保存
+    const profile = { ...(s.love_profile || {}), age: tn }
     await setSession(userId, { love_step: 'Q', love_profile: profile, love_idx: 0, love_answers: [] })
 
-    // 「開始」ボタン
     await safeReply(event.replyToken, {
       type: 'flex',
       altText: '準備OKなら開始を押してね',
@@ -541,13 +553,11 @@ export async function handleLove(event) {
       const nextIdx = idx + 1
       await setSession(userId, { love_step: 'Q', love_answers: answers, love_idx: nextIdx })
 
-      // 次の設問が無ければ最終承諾へ
-      if (!QUESTIONS[nextIdx]) {
+      if (!QUESTIONS[nextIdx]) { // 次の設問なし → 最終承諾へ
         await setSession(userId, { love_step: 'CONFIRM_PAY' })
         await safeReply(event.replyToken, buildFinalConfirmFlex())
         return
       }
-
       await sendNextLoveQuestion(event, { ...s, love_answers: answers, love_idx: nextIdx })
       return
     }
