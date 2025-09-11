@@ -25,7 +25,7 @@ const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
 
 // Supabase Storage
 const ANSWERS_BUCKET = 'answers'            // バケット名（非公開）
-const ANSWERS_PREFIX = 'answers/renai'      // 疑似フォルダ
+const ANSWERS_PREFIX = 'renai'      // 疑似フォルダ
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7 // 7日（604800秒）
 
 /* =========================
