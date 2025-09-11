@@ -1,6 +1,10 @@
 /*
  =========================
-  server.mjs（本番運用 ESM｜LINE署名検証＋冪等化＋200速返し＋ヘルスチェック）
+  server.mjs（完全版｜本番運用 ESM）
+  - LINE署名検証（isRedelivery対応）
+  - 冪等化（Supabase webhook_events）
+  - 200速返し＋並列処理
+  - ヘルスチェック & Graceful shutdown
  =========================
 */
 import 'dotenv/config'
@@ -11,13 +15,15 @@ import rateLimit from 'express-rate-limit'
 import { dispatchEvent } from './dispatcher.mjs'
 import { supabase } from './supabaseClient.js'
 
-// ===== 環境変数（キー名の揺れに両対応） =====
+// ===== 環境変数 =====
 const CHANNEL_SECRET =
   process.env.CHANNEL_SECRET || process.env.LINE_CHANNEL_SECRET
 const PORT = Number(process.env.PORT || 3000)
 
 if (!CHANNEL_SECRET) {
-  console.error('[FATAL] CHANNEL_SECRET が未設定です。Environment を確認してください。')
+  console.error(
+    '[FATAL] CHANNEL_SECRET が未設定です。Environment を確認してください。'
+  )
   process.exit(1)
 }
 
@@ -26,7 +32,7 @@ const app = express()
 // Render/プロキシ環境向け（レート制限のIP判定用）
 app.set('trust proxy', 1)
 
-// 署名検証で使う raw body を保持（JSONパース前）
+// JSONパース＋署名検証用 rawBody 保存
 app.use(
   express.json({
     verify: (req, _res, buf) => {
@@ -35,14 +41,10 @@ app.use(
   })
 )
 
-// セキュリティヘッダ（必要最低限）
-app.use(
-  helmet({
-    // 追加の制約が必要になったらここに追記（例：contentSecurityPolicy 等）
-  })
-)
+// セキュリティヘッダ
+app.use(helmet())
 
-// 簡易レート制限（/health は除外）
+// レート制限（/health は除外）
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -53,19 +55,29 @@ app.use(
   })
 )
 
-// ===== 署名検証 =====
+// ===== LINE署名検証 =====
 function verifyLineSignature(req, res, next) {
   try {
     const signature = req.get('x-line-signature') || ''
     const rawBody = req.rawBody
-    if (!rawBody || !signature) return res.status(400).send('Bad Request')
+    if (!rawBody) {
+      console.warn('[SIG] rawBody missing')
+      return res.status(400).send('Bad Request')
+    }
+    if (!signature) {
+      console.warn('[SIG] signature header missing')
+      return res.status(400).send('Bad Request')
+    }
 
     const computed = crypto
       .createHmac('sha256', CHANNEL_SECRET)
       .update(rawBody)
       .digest('base64')
 
-    if (computed !== signature) return res.status(403).send('Invalid signature')
+    if (computed !== signature) {
+      console.warn('[SIG] invalid signature')
+      return res.status(403).send('Invalid signature')
+    }
     next()
   } catch (e) {
     console.error('[SIGNATURE VERIFY ERROR]', e)
@@ -73,14 +85,16 @@ function verifyLineSignature(req, res, next) {
   }
 }
 
-// ===== 冪等化（Supabase） =====
+// ===== 冪等化（Supabase webhook_events） =====
 // create table if not exists webhook_events (
 //   event_id text primary key,
 //   created_at timestamptz default now()
 // );
 async function isDuplicateEvent(eventId) {
   if (!eventId) return false
-  const { error } = await supabase.from('webhook_events').insert({ event_id: eventId })
+  const { error } = await supabase
+    .from('webhook_events')
+    .insert({ event_id: eventId })
   if (error && error.code === '23505') return true // 一意制約違反＝重複
   if (error) {
     console.error('[IDEMPOTENCY ERROR]', error)
@@ -100,8 +114,8 @@ app.post('/webhook', verifyLineSignature, async (req, res) => {
   await Promise.allSettled(
     events.map(async (ev) => {
       try {
-        const redelivery = ev?.deliveryContext?.redelivery === true
-        const eventId = ev?.message?.id || ev?.webhookEventId || ev?.eventId
+        const redelivery = ev?.deliveryContext?.isRedelivery === true
+        const eventId = ev?.webhookEventId || ev?.message?.id || ev?.eventId
         const dup = await isDuplicateEvent(eventId)
         if (dup || redelivery) {
           console.log('[SKIP DUPLICATE]', { eventId, redelivery })
@@ -118,7 +132,10 @@ app.post('/webhook', verifyLineSignature, async (req, res) => {
 // ===== ヘルスチェック & ルート =====
 app.get('/health', async (_req, res) => {
   try {
-    const { error } = await supabase.from('webhook_events').select('event_id').limit(1)
+    const { error } = await supabase
+      .from('webhook_events')
+      .select('event_id')
+      .limit(1)
     if (error) throw error
     res.status(200).json({
       ok: true,
@@ -134,7 +151,8 @@ app.get('/health', async (_req, res) => {
 
 app.get('/', (_req, res) => res.status(200).send('ok'))
 
-// ===== フォールバック（未捕捉エラー） =====
+// ===== 404 & エラーハンドラ =====
+app.use((_req, res) => res.status(404).send('Not Found'))
 app.use((err, _req, res, _next) => {
   console.error('[UNCAUGHT ERROR]', err)
   res.status(500).send('Internal Server Error')
