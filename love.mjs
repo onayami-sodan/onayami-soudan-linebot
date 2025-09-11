@@ -1,11 +1,13 @@
 /*
  =========================
-   love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋表示から（）除去）
-   ※ 要望対応：最終承諾の青いテキスト吹き出しを完全に削除（Flexのみ送信）
+   love.mjs（完全版フル｜支払い方法＋最終承諾フロー＋表示から（）除去＋TXT化/保存/7日URL返信）
+   ※ 要望対応：
+     - 最終承諾の青いテキスト吹き出しを完全に削除（Flexのみ送信）
+     - 診断完了 → TXT化 → Supabaseに保存 → 7日有効の署名付きURLを返信（Flex＋テキスト）
    - 案内：長文テキスト + 横並びボタン（Flex）
    - 設問：縦ボタン（Flex）※質問文/選択肢の（）はユーザー表示から除去
    - 設問完了後：3,980円（税込）の最終承諾 → Flexのみで表示（テキスト送信なし）
-   - 回答控え：選択肢（必要なら質問文も）から（）を除去
+   - 回答控えTXT：質問文/選択肢とも（）を除去した体裁で保存
    - セッションは upsert（部分更新）
  =========================
 */
@@ -17,6 +19,11 @@ import { messagingApi } from '@line/bot-sdk'
 
 const SESSION_TABLE = 'user_sessions'
 const LINE_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN
+
+// TXT保存先（Supabase Storage）
+const ANSWERS_BUCKET = 'answers'            // 例: 'answers'
+const ANSWERS_PREFIX = 'answers/renai'      // 例: 'answers/renai'
+const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7 // 7日（604,800秒）
 
 // ====== 起動時サニティチェック ======
 ;(function sanityCheckQuestions() {
@@ -82,7 +89,7 @@ async function getLineDisplayName(userId) {
   }
 }
 
-// ====== ユーザー表示のクリーンアップ（括弧内メモ除去：全角/半角） ======
+// ====== 表示/保存用のクリーンアップ（括弧内メモ除去：全角/半角） ======
 function cleanForUser(str = '') {
   return String(str)
     .replace(/（[^）]*）/g, '')   // 全角（…）
@@ -91,11 +98,112 @@ function cleanForUser(str = '') {
     .trim()
 }
 
-/* =========================
-   Flex builders
-   ========================= */
+// ====== ファイル名・パス用のサニタイズ ======
+function safeName(s = '') {
+  return String(s).replace(/[\/:*?"<>|\s]+/g, '')
+}
 
-// 案内ボタン：横並び・色分け（長文は別送）
+// ====== TXT生成（質問文/選択肢とも（）除去の体裁） ======
+function buildAnswersTxt({ nickname = '', gender = '', ageRange = '', ageExact = '', answers = [] }) {
+  const lines = []
+  lines.push('---')
+  lines.push('# 🌸 丸裸心理テスト 40問（選択肢付き 完全版）')
+  lines.push('')
+  if (nickname) lines.push(`■ LINEニックネーム：${nickname}`)
+  lines.push(`■ 性別：${gender || '未選択'}`)
+  lines.push(`■ 年代：${ageExact || ageRange || '未選択'}`)
+  lines.push('')
+
+  const addBlock = (start, end) => {
+    lines.push(`### ${start}〜${end}`)
+    lines.push('')
+    for (let i = start; i <= end; i++) {
+      const q = QUESTIONS[i - 1]
+      const qText = cleanForUser(q?.text || '')
+      const pick = answers[i - 1] ? Number(answers[i - 1]) - 1 : -1
+      const choice = pick >= 0 ? cleanForUser(q?.choices?.[pick] || '') : '（未選択）'
+      const letter = pick >= 0 ? ['A','B','C','D'][pick] : '-'
+      lines.push(`${i}. ${qText}`)
+      lines.push(`　${letter}: ${choice}`)
+      lines.push('')
+    }
+  }
+
+  addBlock(1, 10)
+  addBlock(11, 20)
+  addBlock(21, 30)
+  addBlock(31, 40)
+
+  lines.push('---')
+  lines.push(`（生成日時: ${new Date().toLocaleString()}）`)
+  return lines.join('\n')
+}
+
+// ====== TXTをStorageへ保存 → 7日署名URLを取得 ======
+async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageRange = '', ageExact = '', answers = [] }) {
+  if (!userId) throw new Error('userIdが空')
+
+  const txt = buildAnswersTxt({ nickname, gender, ageRange, ageExact, answers })
+  const iso = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
+  const tagG = gender ? `_g-${safeName(gender)}` : ''
+  const tagA = (ageExact || ageRange) ? `_a-${safeName(ageExact || ageRange)}` : ''
+  const file = `maruhada_40q_${iso}${tagG}${tagA}.txt`
+  const key = `${ANSWERS_PREFIX}/${safeName(userId)}/${file}`
+
+  const body =
+    (typeof Blob !== 'undefined')
+      ? new Blob([txt], { type: 'text/plain; charset=utf-8' })
+      : Buffer.from(txt, 'utf-8')
+
+  const { error: upErr } = await supabase
+    .storage
+    .from(ANSWERS_BUCKET)
+    .upload(key, body, { upsert: true, contentType: 'text/plain; charset=utf-8' })
+  if (upErr) throw upErr
+
+  const { data: signed, error: signErr } = await supabase
+    .storage
+    .from(ANSWERS_BUCKET)
+    .createSignedUrl(key, SIGNED_URL_TTL_SEC)
+  if (signErr) throw signErr
+
+  return { signedUrl: signed?.signedUrl || '', path: key, filename: file }
+}
+
+// ====== ダウンロード用Flex（ボタンのみ・見やすい） ======
+function buildDownloadFlex({ url, filename }) {
+  return {
+    type: 'flex',
+    altText: '回答控え（TXT）をダウンロードできます',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: '回答控え（TXT）', weight: 'bold', size: 'md' },
+          { type: 'text', text: '7日間有効のダウンロードリンクを発行しました', size: 'sm', wrap: true },
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'md',
+            color: '#4CAF50',
+            action: { type: 'uri', label: 'ダウンロード', uri: url },
+          },
+          { type: 'text', text: filename, size: 'xs', color: '#6b7280', wrap: true },
+        ],
+      },
+      styles: { body: { backgroundColor: '#FFF9FB' } },
+    },
+  }
+}
+
+/* =========================
+   Flex builders（案内/設問/最終承諾）
+   ========================= */
 function buildIntroButtonsFlex() {
   return {
     type: 'flex',
@@ -116,19 +224,8 @@ function buildIntroButtonsFlex() {
             spacing: 'md',
             margin: 'lg',
             contents: [
-              {
-                type: 'button',
-                style: 'primary',
-                color: '#4CAF50', // 承諾＝グリーン
-                height: 'md',
-                action: { type: 'message', label: '承諾', text: '承諾' },
-              },
-              {
-                type: 'button',
-                style: 'secondary',
-                height: 'md',
-                action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' },
-              }, // secondary に color は付けない
+              { type: 'button', style: 'primary', color: '#4CAF50', height: 'md', action: { type: 'message', label: '承諾', text: '承諾' } },
+              { type: 'button', style: 'secondary', height: 'md', action: { type: 'message', label: '💌 はじめの画面へ', text: 'トークTOP' } },
             ],
           },
         ],
@@ -138,7 +235,6 @@ function buildIntroButtonsFlex() {
   }
 }
 
-// 設問：縦ボタン（押し間違い防止で余白）※表示はクリーン化
 function buildQuestionFlex(q) {
   const circledNums = ['①', '②', '③', '④']
   const qText = cleanForUser(q.text)
@@ -157,13 +253,7 @@ function buildQuestionFlex(q) {
         contents: [
           { type: 'text', text: `Q${q.id}. ${qText}`, wrap: true, weight: 'bold', size: 'md' },
           ...choiceLabels.map((label, i) => ([
-            {
-              type: 'button',
-              style: 'primary',
-              height: 'sm',
-              color: '#F59FB0',
-              action: { type: 'message', label: `${circledNums[i]} ${label}`, text: String(i + 1) },
-            },
+            { type: 'button', style: 'primary', height: 'sm', color: '#F59FB0', action: { type: 'message', label: `${circledNums[i]} ${label}`, text: String(i + 1) } },
             { type: 'separator', margin: 'md', color: '#FFFFFF00' },
           ])).flat(),
         ],
@@ -173,7 +263,6 @@ function buildQuestionFlex(q) {
   }
 }
 
-// 最終承諾：横並びボタン（承諾 / トークTOP）※テキスト吹き出しは送らない
 function buildFinalConfirmFlex() {
   return {
     type: 'flex',
@@ -234,42 +323,53 @@ async function sendNextLoveQuestion(event, session) {
 }
 
 /* =========================
-   回答控え送信＋48h案内（テキストで返す）
+   診断完了 → TXT化/保存/7日URL返信（Flex＋テキスト）
    ========================= */
-async function sendAnswersAsTextAndNotice(event, session) {
+async function sendAnswersTxtUrlAndNotice(event, session) {
   const userId = event.source?.userId
   const nickname = await getLineDisplayName(userId)
   const profile = session.love_profile || {}
   const answers = session.love_answers || []
 
-  const lines = []
-  lines.push('=== 恋愛診断 回答控え ===')
-  lines.push(`LINEニックネーム: ${nickname || '(取得できませんでした)'}`)
-  lines.push(`性別: ${profile.gender || '(未設定)'}`)
-  lines.push(`年代: ${profile.age || '(未設定)'}`)
-  lines.push(`回答数: ${answers.length}`)
-  lines.push('')
+  try {
+    // 1) 保存＆署名URL
+    const { signedUrl, filename } = await saveTxtAndGetSignedUrl({
+      userId,
+      nickname,
+      gender: profile.gender || '',
+      ageRange: profile.age || '',
+      ageExact: '', // 必要に応じてexact年齢を入れる
+      answers,
+    })
 
-  for (let i = 0; i < QUESTIONS.length; i++) {
-    const q = QUESTIONS[i]
-    const a = answers[i]
-    const idx = a ? Number(a) - 1 : -1
-    const qText = cleanForUser(q.text)
-    const choiceRaw = idx >= 0 ? q.choices[idx] : ''
-    const choiceText = idx >= 0 ? cleanForUser(choiceRaw) : '(未回答)'
-    lines.push(`Q${q.id}. ${qText}`)
-    lines.push(`→ 回答: ${a || '-'} : ${choiceText}`)
-    lines.push('')
+    // 2) テキストで案内（URLを明示）
+    await safeReply(
+      event.replyToken,
+      [
+        '✅ 回答控え（TXT）を作成しました',
+        '7日間有効のダウンロードリンクはこちら',
+        signedUrl,
+        '',
+        '📦 ファイル名：' + filename,
+        '※ 期限が切れた場合は再発行します',
+        '',
+        '💡 診断書は48時間以内にお届けします（URLでご案内）',
+      ].join('\n')
+    )
+
+    // 3) Flexでもボタン提示（端末互換）
+    await push(userId, buildDownloadFlex({ url: signedUrl, filename }))
+
+    // 4) 最終メッセージ（任意）
+    await push(userId, '受け取りありがとう🌸 診断書の完成まで少し待っててね')
+
+  } catch (e) {
+    console.error('[saveTxtAndGetSignedUrl] error:', e)
+    await safeReply(
+      event.replyToken,
+      'ごめんね、回答控えのファイル作成でエラーが出ちゃった… 少し時間をおいてもう一度お試しください'
+    )
   }
-
-  await replyThenPush(userId, event.replyToken, lines.join('\n'))
-
-  await push(
-    userId,
-    '💌 ありがとう！回答を受け取ったよ\n' +
-    '48時間以内に「恋愛診断書」のURLをLINEでお届けするね\n' +
-    '順番に作成しているので、もうちょっと待っててね💛'
-  )
 }
 
 /* =========================
@@ -485,7 +585,8 @@ export async function handleLove(event) {
   // 最終承諾フロー（常にFlexのみ送信）
   if (s?.love_step === 'CONFIRM_PAY') {
     if (tn === '承諾' || /^(ok|はい)$/i.test(tn)) {
-      await sendAnswersAsTextAndNotice(event, s)
+      // ▼ ここでTXT化→保存→7日URL返信
+      await sendAnswersTxtUrlAndNotice(event, s)
       await setSession(userId, { flow: 'idle', love_step: 'DONE' })
       return
     }
