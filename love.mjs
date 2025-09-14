@@ -165,40 +165,48 @@ function buildAnswersTxt({ nickname = '', gender = '', ageRange = '', ageExact =
   return lines.join('\n')
 }
 
+// ★ ここだけ置き換え
 async function saveTxtAndGetSignedUrl({ userId, nickname = '', gender = '', ageRange = '', ageExact = '', answers = [] }) {
   if (!userId) throw new Error('userIdが空')
 
   await ensureBucketExists(ANSWERS_BUCKET)
 
   const txt = buildAnswersTxt({ nickname, gender, ageRange, ageExact, answers })
+
+  // ▼ 追加：UTF-8 BOM を先頭に付与して文字化け回避（Windows/一部アプリ対策）
+  const BOM = '\uFEFF'
+  const body = Buffer.from(BOM + txt, 'utf-8')
+
+  // ユニーク＆ASCIIセーフなファイル名（上書き防止のためランダム文字列も付与）
   const iso  = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
   const tagG = gender ? `_g-${safeName(gender)}` : ''
   const tagA = (ageExact || ageRange) ? `_a-${safeName(ageExact || ageRange)}` : ''
+  const rand = Math.random().toString(36).slice(2, 8) // 6文字
 
-  const rawFile = `maruhada_40q_${iso}${tagG}${tagA}.txt`
+  const rawFile = `maruhada_40q_${iso}${tagG}${tagA}_${rand}.txt`
   const file    = safeFileName(rawFile)
-
-  const key = `${ANSWERS_PREFIX}/${safeName(userId)}/${file}`
-
-  const body =
-    (typeof Blob !== 'undefined')
-      ? new Blob([txt], { type: 'text/plain; charset=utf-8' })
-      : Buffer.from(txt, 'utf-8')
+  const key     = `${ANSWERS_PREFIX}/${safeName(userId)}/${file}`
 
   const { error: upErr } = await supabase
     .storage
     .from(ANSWERS_BUCKET)
-    .upload(key, body, { upsert: true, contentType: 'text/plain; charset=utf-8' })
+    .upload(key, body, {
+      upsert: true,
+      contentType: 'text/plain; charset=utf-8', // ← 明示
+      cacheControl: 'no-store',
+    })
   if (upErr) throw upErr
 
+  // ▼ 追加：ダウンロード時のファイル名を強制（環境依存の文字化けを避ける）
   const { data: signed, error: signErr } = await supabase
     .storage
     .from(ANSWERS_BUCKET)
-    .createSignedUrl(key, SIGNED_URL_TTL_SEC)
+    .createSignedUrl(key, SIGNED_URL_TTL_SEC, { download: file })
   if (signErr) throw signErr
 
   return { signedUrl: signed?.signedUrl || '', path: key, filename: file }
 }
+
 
 /* =========================
    Flex builders
