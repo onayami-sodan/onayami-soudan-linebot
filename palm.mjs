@@ -1,7 +1,7 @@
 // palm.mjs（完全版フル：大きいFlexボタンUX + 最終承諾でニックネーム/性別/年代を表示）
 
 import { supabase } from './supabaseClient.js'
-import { safeReply, push } from './lineClient.js'
+import { safeReply } from './lineClient.js'
 import { messagingApi } from '@line/bot-sdk'
 
 const SESSION_TABLE = 'user_sessions'
@@ -224,10 +224,11 @@ export async function sendPalmistryIntro(event) {
   const userId = event.source?.userId
   if (userId) await setSession(userId, { flow: 'palm', palm_step: 'PRICE' })
 
-  await safeReply(event.replyToken, PALM_INTRO_TEXT.join('\n'))
-  if (userId) await push(userId, buildIntroButtonsFlex())
-}
-
+    await safeReply(event.replyToken, [
+    PALM_INTRO_TEXT.join('\n'),
+    buildIntroButtonsFlex()
+  ])
+ }
 /* =========================
    手相フロー本体（テキスト＆画像）
    ========================= */
@@ -272,10 +273,12 @@ export async function handlePalm(event) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
     }
-    await safeReply(event.replyToken, PALM_INTRO_TEXT.join('\n'))
-    await push(userId, buildIntroButtonsFlex())
+       await safeReply(event.replyToken, [
+      PALM_INTRO_TEXT.join('\n'),
+      buildIntroButtonsFlex()
+   ])
     return
-  }
+   }
 
   // GENDER
   if (step === 'GENDER') {
