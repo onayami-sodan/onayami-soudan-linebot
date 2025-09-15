@@ -12,7 +12,8 @@
  =========================
 */
 
-import { safeReply, push } from './lineClient.js'
+
+import { safeReply } from './lineClient.js'
 import { supabase } from './supabaseClient.js'
 import { QUESTIONS } from './questions.js'
 import { messagingApi } from '@line/bot-sdk'
