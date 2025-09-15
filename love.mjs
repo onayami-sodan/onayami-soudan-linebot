@@ -333,9 +333,12 @@ function buildDownloadFlex({ signedUrl, fileName, validDays = 7 }) {
 export async function sendLove40Intro(event) {
   const userId = event.source?.userId
   if (userId) await setSession(userId, { flow: 'love40', love_step: 'PRICE', love_idx: 0 })
-  await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
-  await push(userId, buildIntroButtonsFlex())
-}
+
+ await safeReply(event.replyToken, [
+   LOVE_INTRO_TEXT.join('\n'),
+   buildIntroButtonsFlex()
+ ])
+
 
 /* =========================
    質問出題
@@ -384,16 +387,11 @@ async function sendAnswersTxtUrlAndNotice(event, session) {
     console.log('[signedUrl]', filename, signedUrl)
 
     // ★ ユーザーへはダウンロードボタンのFlexのみ送る
-    await safeReply(event.replyToken, buildDownloadFlex({
-      signedUrl,
-      fileName: filename,
-      validDays: 7,
-    }))
+ await safeReply(event.replyToken, [
+   buildDownloadFlex({ signedUrl, fileName: filename, validDays: 7 }),
+   { type: 'text', text: '🌸受け取りありがとう🌸恋愛診断書は順番に作成してるので48時間以内にURLを送るね⭐' }
+ ])
 
-    // ★ 固定の締め文（URLは書かない）
-    await push(userId,
-      '🌸受け取りありがとう🌸恋愛診断書は順番に作成してるので48時間以内にURLを送るね⭐'
-    )
   } catch (e) {
     console.error('[saveTxtAndGetSignedUrl] error:', e)
     await safeReply(
@@ -450,10 +448,11 @@ export async function handleLove(event) {
       await safeReply(event.replyToken, 'またいつでもどうぞ🌿')
       return
     }
-    await safeReply(event.replyToken, LOVE_INTRO_TEXT.join('\n'))
-    await push(userId, buildIntroButtonsFlex())
-    return
-  }
+
+ await safeReply(event.replyToken, [
+   LOVE_INTRO_TEXT.join('\n'),
+   buildIntroButtonsFlex()
+ ])
 
   // PROFILE_GENDER
   if (s?.love_step === 'PROFILE_GENDER') {
