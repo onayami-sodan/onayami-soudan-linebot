@@ -454,6 +454,7 @@ export async function handleLove(event) {
    LOVE_INTRO_TEXT.join('\n'),
    buildIntroButtonsFlex()
  ])
+   return
 }
   // PROFILE_GENDER
   if (s?.love_step === 'PROFILE_GENDER') {
