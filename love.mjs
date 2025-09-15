@@ -338,7 +338,7 @@ export async function sendLove40Intro(event) {
    LOVE_INTRO_TEXT.join('\n'),
    buildIntroButtonsFlex()
  ])
-
+}
 
 /* =========================
    質問出題
@@ -453,7 +453,7 @@ export async function handleLove(event) {
    LOVE_INTRO_TEXT.join('\n'),
    buildIntroButtonsFlex()
  ])
-
+}
   // PROFILE_GENDER
   if (s?.love_step === 'PROFILE_GENDER') {
     const ok = ['男性', '女性', 'その他'].includes(tn)
