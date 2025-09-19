@@ -653,13 +653,13 @@ async function handleAiChat(event, session) {
 
   try {
     if (!authenticated) {
-      if (newCount <= 3) {
+      if (newCount <= 5) {
         messages.push({ role: 'user', content: userText });
         messages = capHistory(messages);
         const result = await aiChat(messages);
         replyText = result.text;
         if (result.ok) messages.push({ role: 'assistant', content: result.text });
-      } else if (newCount === 4) {
+      } else if (newCount === 6) {
         messages.push({
           role: 'user',
           content:
