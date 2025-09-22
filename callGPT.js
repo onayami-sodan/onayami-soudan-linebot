@@ -1,9 +1,3 @@
-// callGPT.js（ESM完全版）
-// - ズバッと短答テンプレを system プロンプトで強制
-// - 絵文字は 1〜2 個までに自動制限（後処理）
-// - gpt-4o-mini 優先、長文/重症ワード/失敗時は gpt-4o へ自動切替
-// - aiRouter からは `import { aiChat } from './callGPT.js'` で利用
-
 import 'dotenv/config'
 import OpenAI from 'openai'
 
@@ -16,14 +10,12 @@ function limitEmojis(text, max = 2) {
   const result = []
   let count = 0
   for (const ch of all) {
-    // おおまかな絵文字判定（サロゲートペア/記号をざっくり抑制）
     const isEmoji = /\p{Extended_Pictographic}/u.test(ch)
     if (isEmoji) {
       if (count < max) {
         result.push(ch)
         count++
       }
-      // 超過分は捨てる
     } else {
       result.push(ch)
     }
@@ -31,58 +23,99 @@ function limitEmojis(text, max = 2) {
   return result.join('')
 }
 
-export function sanitize(text) {
+export function sanitize(text, allowPepTalk = false) {
   if (!text) return ''
-  let out = text.trim()
+  let out = String(text || '').trim()
 
-  // 余計なラベルを除去
-  out = out.replace(/^\s*[-*●◎◉■□◆◇]?\s*(結論|根拠|行動(?:指針|提案)|要点)\s*[:：]\s*/gim, '')
-  out = out.replace(/ズバッと結論を言うと[:：]?\s*/g, '')
-
-  // 句点禁止 → 改行に変換
+  // 句点 → 改行
   out = out.replace(/。/g, '\n')
-  out = out.replace(/\n{3,}/g, '\n\n').trim()
 
-  // 末尾の無意味な語尾や記号の連続を整理
-  out = out.replace(/[ \t]+$/gm, '').replace(/[\u3000 ]+\n/g, '\n')
+  // 見出し語・締めフレーズを削除
+  const killPhrases = [
+    'ズバッと結論','結論','理由','根拠','行動指針','行動提案','要点','まとめ','総括',
+    '今回の相談はここまで','友達としては以上です','本件は以上','以上です'
+  ]
+  for (const w of killPhrases) {
+    const head = new RegExp(
+      `^[\\s\\-＊*●◎◉■□◆◇👉➡▶▷・:：\\[\\]()【】]*${w}[\\s　]*[:：]?[\\s　]*`,
+      'gim'
+    )
+    out = out.replace(head, '')
+    const mid = new RegExp(`[\\s　]*${w}[\\s　]*[:：]?`, 'g')
+    out = out.replace(mid, '')
+  }
 
-  // 絵文字を最大2個まで
+  // 気休め削除（重症時は残す設定も可能）
+  if (!allowPepTalk) {
+    const pepTalk = [
+      '呼吸を整え','深呼吸','落ち着こう','落ち着くよ','大丈夫','お水を飲んで',
+      '休みましょう','一旦休んで','無理しないで','リラックスして'
+    ]
+    for (const w of pepTalk) out = out.replace(new RegExp(w, 'g'), '')
+  }
+
+  // 空行・記号整理
+  out = out.replace(/^[-=‐―—–＿＿\s]+$/gm, '')
+  out = out.replace(/\n{3,}/g, '\n\n')
+  out = out.replace(/[ \t]+$/gm, '').replace(/[\u3000 ]+\n/g, '\n').trim()
+
+  // 3行構成に切り詰め
+  const lines = out.split('\n').map(s => s.trim()).filter(Boolean)
+  out = lines.slice(0, 3).join('\n')
+
+  // 希望フレーズ「居ると思う」を強制調整
+  if (out.split('\n').length === 3 && !out.endsWith('居ると思う')) {
+    out = out.replace(/居る$/, '居ると思う')
+  }
+
+  // 絵文字を制限
   out = limitEmojis(out, 2)
 
   return out
 }
 
-// ===== ルーティング判定 =====
-function shouldUse4o(userText = '') {
-  const t = String(userText || '')
-  const len = t.length
-  const heavyWords = [
-    '死にたい', '消えたい', '自傷', '虐待', 'DV', '妊娠', '中絶', 'いじめ', '自殺',
-    '性的', '強制', '暴力', '警察', 'ストーカー'
-  ]
-  const hit = heavyWords.some(w => t.includes(w))
-  return len >= 140 || hit
+// ===== 重症判定 =====
+const HEAVY_WORDS = [
+  '死にたい','消えたい','自傷','虐待','DV','妊娠','中絶','いじめ','自殺',
+  '性的','強制','暴力','警察','ストーカー',
+  '恋愛','相談','片思い','失恋','浮気','離婚','つらい','しんどい','障害'
+]
+
+function containsHeavyWord(text) {
+  if (!text) return false
+  return HEAVY_WORDS.some(w => text.includes(w))
 }
 
-// ===== system プロンプト（ズバッと短答テンプレ＋絵文字最小） =====
-const SYSTEM_PROMPT = `
+// ===== system プロンプト =====
+const BASE_SYSTEM_PROMPT = `
 あなたは信頼できる相談員
-返答は「ズバッと結論→短い根拠→行動指針」の3行構成にする
-句点「。」は使わない 改行で区切る
-絵文字は1〜2個までに抑える（基本は無し）キラキラ系の多用は禁止
-リンク誘導はしない 相談に集中
-口調は落ち着いて丁寧 断定は明確に
+返答は必ず3行構成
+1行目＝厳しくはっきりした結論
+2行目＝短い理由
+3行目＝優しさを込めた一歩 ただし最後は「居ると思う」で締める
+句点は使わない 改行で区切る
+絵文字は0〜2個まで
+慰めや気休めは禁止
+リンク誘導や宣伝はしない
 `.trim()
 
-/**
- * Chat 補助（mini優先→必要時4o）
- * @param {Array|String} messagesOrText - messages配列 or ユーザテキスト
- * @param {Object} opts
- * @param {number} [opts.maxTokens=360]
- * @param {number} [opts.temperature=0.4]
- * @param {string} [opts.modelHint]
- * @returns {Promise<{ok:boolean, text:string}>}
- */
+const HEAVY_SYSTEM_PROMPT = `
+あなたは信頼できる相談員（センシティブ対応）
+返答は必ず3行構成
+最初に現状を確認する一言
+次に具体的な安全確保や行動を一つ
+最後に希望を込めるが「居ると思う」で締める
+慰めや気休めは禁止 公的窓口が必要なら案内
+句点は使わない 改行で区切る
+`.trim()
+
+// ===== モデル選択 =====
+function shouldUse4o(userText = '') {
+  const len = String(userText || '').length
+  return len >= 140 || containsHeavyWord(userText)
+}
+
+// ===== Chat関数 =====
 export async function aiChat(messagesOrText, opts = {}) {
   const {
     maxTokens = 360,
@@ -90,7 +123,6 @@ export async function aiChat(messagesOrText, opts = {}) {
     modelHint,
   } = opts
 
-  // messages を正規化して system を先頭に注入
   const userMsg = Array.isArray(messagesOrText)
     ? (messagesOrText.find(m => m.role === 'user')?.content ?? '')
     : String(messagesOrText || '')
@@ -99,12 +131,16 @@ export async function aiChat(messagesOrText, opts = {}) {
     ? messagesOrText
     : [{ role: 'user', content: userMsg }]
 
-  // 既に system が入っていなければ先頭に付与
-  const messages = baseMessages[0]?.role === 'system'
-    ? baseMessages
-    : [{ role: 'system', content: SYSTEM_PROMPT }, ...baseMessages]
+  const isHeavy = containsHeavyWord(userMsg)
 
-  // モデル選択
+  let messages = baseMessages[0]?.role === 'system'
+    ? baseMessages
+    : [{ role: 'system', content: BASE_SYSTEM_PROMPT }, ...baseMessages]
+
+  if (isHeavy) {
+    messages = [{ role: 'system', content: HEAVY_SYSTEM_PROMPT }, ...baseMessages]
+  }
+
   const prefer4o = shouldUse4o(userMsg)
   const order = [
     modelHint || (prefer4o ? 'gpt-4o' : 'gpt-4o-mini'),
@@ -114,20 +150,18 @@ export async function aiChat(messagesOrText, opts = {}) {
   async function tryOnce(model) {
     const res = await openai.chat.completions.create({
       model,
-      temperature,
-      max_tokens: maxTokens,
+      temperature: isHeavy ? 0.3 : temperature,
+      max_tokens: isHeavy ? Math.max(maxTokens, 800) : maxTokens,
       messages,
-      // 反復を抑える
       frequency_penalty: 0.3,
       presence_penalty: 0.0,
     })
     const raw = (res.choices?.[0]?.message?.content || '').trim()
-    const cleaned = sanitize(raw)
+    const cleaned = sanitize(raw, isHeavy)
     if (!cleaned) throw new Error('empty-response')
     return cleaned
   }
 
-  // 1回目 → 失敗なら 2回目（簡易リトライ）
   try {
     const text = await tryOnce(order[0])
     return { ok: true, text }
@@ -138,10 +172,19 @@ export async function aiChat(messagesOrText, opts = {}) {
       return { ok: true, text }
     } catch (e2) {
       console.error('[aiChat second ERROR]', e2?.message || e2)
-      // エラー時も絵文字最小・句点無し
+      if (isHeavy) {
+        return {
+          ok: false,
+          text: [
+            '応答に失敗した',
+            '必要ならすぐに最寄りの医療機関や相談窓口に連絡して',
+            '危険を感じたら警察や救急に連絡を'
+          ].join('\n')
+        }
+      }
       return {
         ok: false,
-        text: '今は呼吸を整えよう 深く3回吸って吐く それだけで少し落ち着くよ'
+        text: '応答に失敗した\n通信かサーバ障害\n同じメッセージをもう一度送って'
       }
     }
   }
