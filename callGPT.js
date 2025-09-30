@@ -1,27 +1,24 @@
 /*
  =========================
    callGPT.js｜綾瀬はるか風お姉さん固定
+   （初期設定：絵文字なし / モデルは gpt-4o-mini固定）
  =========================
 */
 import 'dotenv/config'
 import OpenAI from 'openai'
 export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-// ===== モデル選択 =====
-// 意味のある文章は gpt-4o
-// 単語だけや「あ」「うん」みたいな短すぎる入力は gpt-4o-mini
-function chooseModel(userText = '') {
-  const len = String(userText || '').trim().length
-  if (len < 4) return 'gpt-4o-mini'
-  return 'gpt-4o'
-}
+// ===== モデル固定 =====
+const MODEL = 'gpt-4o-mini'
 
 // ===== system プロンプト =====
+// 👉 初期は「絵文字禁止」設定を明示
 const BASE_SYSTEM_PROMPT = `
 あなたは恋愛と人生経験が豊富な優しい綾瀬はるか風のお姉さん
 言葉は柔らかく可愛く 会話の相手に合わせて自然に話す
 相手が望んだときだけアドバイスをする
 命令や否定は禁止 あくまでお姉さんとして寄り添う
+絵文字は初期設定では使わない 必要と相手が望んだときのみ使う
 `.trim()
 
 // ===== Chat関数 =====
@@ -43,11 +40,9 @@ export async function aiChat(messagesOrText, opts = {}) {
     ? baseMessages
     : [{ role: 'system', content: BASE_SYSTEM_PROMPT }, ...baseMessages]
 
-  const model = chooseModel(userMsg)
-
   try {
     const res = await openai.chat.completions.create({
-      model,
+      model: MODEL,          // ← 4o-mini固定
       temperature,
       max_tokens: maxTokens,
       messages,
@@ -58,7 +53,7 @@ export async function aiChat(messagesOrText, opts = {}) {
     console.error('[aiChat ERROR]', e?.message || e)
     return {
       ok: false,
-      text: '応答に失敗しちゃった…もう一度送ってみてね🌸'
+      text: '応答に失敗しちゃった…もう一度送ってみてね'
     }
   }
 }
