@@ -9,7 +9,7 @@
     "build": "echo \"no build\""
   },
   "engines": {
-    "node": "20.x"
+    "node": "22.x"
   },
   "dependencies": {
     "@line/bot-sdk": "^9.0.4",
