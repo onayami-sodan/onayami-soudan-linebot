@@ -1,7 +1,7 @@
 /*
  =========================
    callGPT.js｜AI呼び出し専用
-   gpt-4.1-mini / 低温度 / systemはaiRouter側で管理
+   gpt-4.1-mini
  =========================
 */
 
@@ -22,12 +22,7 @@ export async function aiChat(messagesOrText, opts = {}) {
 
   const messages = Array.isArray(messagesOrText)
     ? messagesOrText
-    : [
-        {
-          role: 'user',
-          content: String(messagesOrText || ''),
-        },
-      ]
+    : [{ role: 'user', content: String(messagesOrText || '') }]
 
   try {
     const res = await openai.chat.completions.create({
@@ -37,11 +32,11 @@ export async function aiChat(messagesOrText, opts = {}) {
       messages,
     })
 
-    const raw = (res.choices?.[0]?.message?.content || '').trim()
+    const text = (res.choices?.[0]?.message?.content || '').trim()
 
     return {
       ok: true,
-      text: raw || 'うまく言葉にできなかったから もう一度だけ送ってね',
+      text: text || 'うまく返せなかったから もう一度だけ送ってね',
     }
   } catch (e) {
     console.error('[aiChat ERROR]', e?.message || e)
