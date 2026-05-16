@@ -4,7 +4,7 @@
  =========================
 */
 
-import { handleAI } from './aiRouter.js'
+import { handleAI } from './aiRouter.mjs'
 
 export async function dispatchEvent(event) {
   try {
