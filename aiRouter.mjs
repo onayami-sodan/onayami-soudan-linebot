@@ -1,7 +1,7 @@
 /*
  =========================
    aiRouter.mjs｜AI相談専用 完全版
-   note日替わりパス / 5回制限 / 3日保持 / ユーザー設定固定保存
+   note日替わりパス / 7回制限 / 3日保持 / ユーザー設定固定保存
    履歴10往復 / 相談メモ保持 / 軽い性的恋愛相談対応 / 単調返答防止
    占い・恋愛診断の自然誘導 1日1回
  =========================
@@ -16,6 +16,7 @@ const ADMIN_SECRET = 'azu1228'
 const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
 const MAX_HISTORY_PAIRS = 10
+const FREE_LIMIT = 7
 
 const SETTINGS_ROLE = 'settings'
 const SETTINGS_TYPE = 'user_preferences_v1'
@@ -26,21 +27,30 @@ const MEMORY_TYPE = 'conversation_memory_v1'
 const PROMO_ROLE = 'promo'
 const PROMO_TYPE = 'daily_rich_menu_promo_v1'
 
-const FIFTH_TURN_GUIDE_TEXT =
-  `ここまでが本日の無料相談の5回目です
+const LIMIT_TURN_GUIDE_TEXT =
+  `ここまでたくさん話してくれてありがとう🌙
 
-続けて相談したい場合は
-下の購入ページから本日の合言葉を入手して
-LINEに入力してください`
-
-function buildLimitOnlyText(todayNote) {
-  return `今日は無料分を使い切っています
+今日の無料相談はここで一度区切りになるよ
 
 無料回数が戻るまでは
 リッチメニューから占い・恋愛診断も無料で試してみてね♡
 
 続けてAI相談したい場合は
-こちらから本日の合言葉を入手してください
+下の購入ページから本日の合言葉を入手して
+LINEに入力してね✨`
+
+function buildLimitOnlyText(todayNote) {
+  return `今日の無料相談はここまでだよ🌙
+
+また無料回数が戻ったら
+いつでも続きから話してね
+
+待ってる間は
+リッチメニューから占い・恋愛診断も無料で試してみてね♡
+
+続けてAI相談したい場合は
+こちらから本日の合言葉を入手して
+LINEに入力してね✨
 ${todayNote.url}`
 }
 
@@ -947,16 +957,19 @@ function shouldSuggestRichMenuPromo({ userText, replyText, promo, today, newCoun
   const p = normalizePromo(promo)
 
   if (p.lastPromoDate === today) return false
-  if (newCount >= 5) return false
+  if (newCount >= FREE_LIMIT) return false
   if (isHeavyOrSensitiveForPromo(s)) return false
 
   const looksInterested =
-    /占い|運勢|今日の運勢|明日の運勢|相性|恋愛診断|診断|恋愛タイプ|性格診断|相手の気持ち|本音|未来|誕生日|生年月日|星座|手相/.test(s)
+    /占い|占って|運勢|今日の運勢|明日の運勢|相性|恋愛診断|診断|恋愛タイプ|性格診断|相手の気持ち|相手の本音|本音|未来|誕生日|生年月日|星座|手相/.test(s)
+
+  const softIntent =
+    /私ってどんな|俺ってどんな|向いてる|合ってる|相性いい|気持ち知りたい|どう思われてる|脈あり|脈なし|恋愛運/.test(s)
 
   const answerNaturallyRelated =
     /相性|気持ち|本音|整理|診断|占い|運勢|恋愛タイプ/.test(answer)
 
-  return looksInterested || (answerNaturallyRelated && /好き|恋愛|相性|気持ち|本音|迷う|わからない/.test(s))
+  return looksInterested || softIntent || (answerNaturallyRelated && /好き|恋愛|相性|気持ち|本音|迷う|わからない/.test(s))
 }
 
 function buildRichMenuPromoText(settings) {
@@ -1008,9 +1021,9 @@ export async function sendAiIntro(event) {
 誰にも言いにくい悩みを相談できます
 
 ご利用について
-・1日5往復まで無料
-・5回目はAIの返答後に購入案内が表示されます
-・6回目以降は購入案内のみ表示されます
+・1日7往復まで無料
+・7回目はAIの返答後に購入案内が表示されます
+・8回目以降は購入案内のみ表示されます
 
 使い方
 最初は落ち着いたお姉さん風で返します
@@ -1166,7 +1179,7 @@ URL：${todayNote.url}`
     return
   }
 
-  if (!authenticated && count >= 5) {
+  if (!authenticated && count >= FREE_LIMIT) {
     await saveSession({
       ...session,
       flow: 'ai',
@@ -1238,8 +1251,8 @@ URL：${todayNote.url}`
     }
   }
 
-  if (!authenticated && newCount === 5) {
-    replyText = `${replyText}\n\n${FIFTH_TURN_GUIDE_TEXT}\n${todayNote.url}`
+  if (!authenticated && newCount === FREE_LIMIT) {
+    replyText = `${replyText}\n\n${LIMIT_TURN_GUIDE_TEXT}\n${todayNote.url}`
   }
 
   try {
