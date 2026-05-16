@@ -1,7 +1,7 @@
 /*
  =========================
    aiRouter.mjs｜AI相談専用 完全版
-   note日替わりパス / 5回制限 / 3日保持 / ユーザー設定固定保存 / 履歴4往復
+   note日替わりパス / 5回制限 / 3日保持 / ユーザー設定固定保存 / 履歴10往復 / 相談メモ保持
  =========================
 */
 
@@ -13,10 +13,13 @@ import { isOpen } from './featureFlags.js'
 const ADMIN_SECRET = 'azu1228'
 const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
-const MAX_HISTORY_PAIRS = 4
+const MAX_HISTORY_PAIRS = 10
 
 const SETTINGS_ROLE = 'settings'
 const SETTINGS_TYPE = 'user_preferences_v1'
+
+const MEMORY_ROLE = 'memory'
+const MEMORY_TYPE = 'conversation_memory_v1'
 
 const FIFTH_TURN_GUIDE_TEXT =
   `ここまでが本日の無料相談の5回目です
@@ -81,13 +84,37 @@ function getDefaultSettings() {
   }
 }
 
+function getDefaultMemory() {
+  return {
+    mainConcern: '',
+    emotionalState: '',
+    preferredResponse: '',
+    relationshipContext: '',
+    lastAdvice: '',
+    avoidResponse: '',
+    topics: [],
+    importantFacts: [],
+  }
+}
+
 function normalizeSettings(settings = {}) {
   const base = getDefaultSettings()
 
   return {
     ...base,
     ...settings,
-    styleNotes: Array.isArray(settings.styleNotes) ? settings.styleNotes.slice(0, 8) : [],
+    styleNotes: Array.isArray(settings.styleNotes) ? settings.styleNotes.slice(0, 10) : [],
+  }
+}
+
+function normalizeMemory(memory = {}) {
+  const base = getDefaultMemory()
+
+  return {
+    ...base,
+    ...memory,
+    topics: Array.isArray(memory.topics) ? memory.topics.slice(0, 8) : [],
+    importantFacts: Array.isArray(memory.importantFacts) ? memory.importantFacts.slice(0, 10) : [],
   }
 }
 
@@ -132,6 +159,7 @@ function splitStoredMessages(storedMessages, recent) {
   if (!recent || !Array.isArray(storedMessages)) {
     return {
       settings: getDefaultSettings(),
+      memory: getDefaultMemory(),
       chatMessages: [],
     }
   }
@@ -144,16 +172,26 @@ function splitStoredMessages(storedMessages, recent) {
       m.content.type === SETTINGS_TYPE
   )
 
+  const memoryItem = storedMessages.find(
+    (m) =>
+      m &&
+      m.role === MEMORY_ROLE &&
+      m.content &&
+      m.content.type === MEMORY_TYPE
+  )
+
   const settings = normalizeSettings(settingsItem?.content?.data || {})
+  const memory = normalizeMemory(memoryItem?.content?.data || {})
   const chatMessages = capHistory(storedMessages)
 
   return {
     settings,
+    memory,
     chatMessages,
   }
 }
 
-function packStoredMessages(settings, chatMessages) {
+function packStoredMessages(settings, memory, chatMessages) {
   return [
     {
       role: SETTINGS_ROLE,
@@ -162,19 +200,30 @@ function packStoredMessages(settings, chatMessages) {
         data: normalizeSettings(settings),
       },
     },
+    {
+      role: MEMORY_ROLE,
+      content: {
+        type: MEMORY_TYPE,
+        data: normalizeMemory(memory),
+      },
+    },
     ...capHistory(chatMessages),
   ]
 }
 
+function addUniqueLimited(list, value, limit = 8) {
+  const clean = String(value || '').trim()
+  if (!clean) return Array.isArray(list) ? list.slice(0, limit) : []
+
+  const base = Array.isArray(list) ? list.filter((x) => x !== clean) : []
+  base.push(clean)
+
+  return base.slice(-limit)
+}
+
 function addStyleNote(settings, note) {
-  const clean = String(note || '').trim()
-  if (!clean) return settings
-
   const next = normalizeSettings(settings)
-  const notes = next.styleNotes.filter((x) => x !== clean)
-  notes.push(clean)
-
-  next.styleNotes = notes.slice(-8)
+  next.styleNotes = addUniqueLimited(next.styleNotes, note, 10)
   return next
 }
 
@@ -220,7 +269,7 @@ function isDirectQuestion(text = '') {
 }
 
 function hasConsultationWord(text = '') {
-  return /悩み|相談|好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|学校|友達|親|家族|仕事|職場|死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|怖い|不安|寂しい|どう思う|どうすれば|どうしたら|した方がいい|本気|遊び|都合いい/i.test(text)
+  return /悩み|相談|好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|学校|友達|親|家族|仕事|職場|死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|怖い|不安|寂しい|どう思う|どうすれば|どうしたら|した方がいい|本気|遊び|都合いい|占い|運勢|相性|誕生日|画像|作れる/i.test(text)
 }
 
 function hasStyleWord(text = '') {
@@ -407,6 +456,145 @@ function applyPreferenceUpdates(settings, userText) {
   }
 }
 
+function detectTopic(text = '') {
+  const s = String(text || '')
+
+  if (/好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|本気|遊び|都合いい|相性/.test(s)) {
+    return '恋愛'
+  }
+
+  if (/学校|友達|クラス|先生|部活|勉強|受験/.test(s)) {
+    return '学校 友人関係'
+  }
+
+  if (/親|家族|母|父|兄|姉|弟|妹|家庭/.test(s)) {
+    return '家庭 家族'
+  }
+
+  if (/仕事|職場|上司|同僚|バイト|給料|転職/.test(s)) {
+    return '仕事 職場'
+  }
+
+  if (/死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|不安|怖い|寂しい|眠れない/.test(s)) {
+    return 'メンタル'
+  }
+
+  if (/占い|運勢|誕生日|生年月日/.test(s)) {
+    return '占い'
+  }
+
+  if (/画像|イラスト|写真|作れる|生成/.test(s)) {
+    return '画像相談'
+  }
+
+  return ''
+}
+
+function detectEmotion(text = '') {
+  const s = String(text || '')
+
+  if (/死にたい|消えたい/.test(s)) return '危険度が高い可能性があるため安全確認を優先する'
+  if (/つらい|辛い|しんどい|疲れ|病ん/.test(s)) return 'かなり疲れていて受け止めを必要としている'
+  if (/不安|怖い|心配/.test(s)) return '不安が強く安心材料と具体策を求めている'
+  if (/寂しい|さみしい|孤独/.test(s)) return '寂しさが強く寄り添いを求めている'
+  if (/怒り|ムカつく|腹立つ|許せない/.test(s)) return '怒りが強く気持ちの整理を必要としている'
+
+  return ''
+}
+
+function detectPreferredResponse(text = '', settings = {}) {
+  const s = String(text || '')
+  const notes = Array.isArray(settings.styleNotes) ? settings.styleNotes.join(' ') : ''
+
+  if (/辛口|厳しく|ハッキリ|はっきり|結論/.test(s + notes)) {
+    return '共感よりも結論を先に出す返答を望んでいる'
+  }
+
+  if (/優しく|やさしく|甘えた|彼女っぽく|恋人っぽく/.test(s + notes + settings.character)) {
+    return '優しく受け止めながらも最後は具体的に導く返答を望んでいる'
+  }
+
+  if (/短く|簡潔|一言/.test(s)) {
+    return '短く簡潔な返答を望んでいる'
+  }
+
+  return ''
+}
+
+function cleanShortText(text = '', max = 120) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/[。]/g, '')
+    .trim()
+    .slice(0, max)
+}
+
+function updateConversationMemory(memory, userText, replyText, settings) {
+  const next = normalizeMemory(memory)
+  const s = String(userText || '').trim()
+  const topic = detectTopic(s)
+  const emotion = detectEmotion(s)
+  const preferred = detectPreferredResponse(s, settings)
+
+  if (topic) {
+    next.topics = addUniqueLimited(next.topics, topic, 8)
+  }
+
+  if (hasConsultationWord(s)) {
+    const shortConcern = cleanShortText(s, 120)
+    if (shortConcern) {
+      next.mainConcern = shortConcern
+    }
+  }
+
+  if (emotion) {
+    next.emotionalState = emotion
+  }
+
+  if (preferred) {
+    next.preferredResponse = preferred
+  }
+
+  if (/彼氏|彼女|元彼|元カノ|好きな人|旦那|嫁|妻|夫|友達|親|母|父|上司|同僚/.test(s)) {
+    next.relationshipContext = cleanShortText(s, 120)
+  }
+
+  if (/曖昧|一般論|それだけ|違う|そうじゃない|むちゃくちゃ|おかしい|嫌/.test(s)) {
+    next.avoidResponse = '曖昧な一般論や設定説明だけの返答は避ける'
+  }
+
+  const advice = cleanShortText(replyText, 140)
+  if (advice) {
+    next.lastAdvice = advice
+  }
+
+  return normalizeMemory(next)
+}
+
+function buildMemoryBlock(memory) {
+  const m = normalizeMemory(memory)
+
+  const topics = m.topics.length ? m.topics.join(' / ') : 'まだ特定なし'
+  const facts = m.importantFacts.length ? m.importantFacts.join(' / ') : 'なし'
+
+  return `
+現在の相談メモ
+・主な悩み：${m.mainConcern || 'まだ特定なし'}
+・感情状態：${m.emotionalState || 'まだ特定なし'}
+・望んでいる対応：${m.preferredResponse || 'まだ特定なし'}
+・関係性や状況：${m.relationshipContext || 'まだ特定なし'}
+・前回の助言：${m.lastAdvice || 'なし'}
+・避ける返答：${m.avoidResponse || '曖昧な一般論だけで終わらない'}
+・話題傾向：${topics}
+・重要メモ：${facts}
+
+この相談メモは直近の会話履歴よりも大きな流れを読むために使う
+相談者が何に悩んでいて どんな答えを求めているかを推測して返す
+ただし決めつけすぎず 必要なら短く確認する
+`.trim()
+}
+
 function buildSettingsBlock(settings) {
   const callName = settings.callName || '指定なし'
   const tone =
@@ -449,9 +637,10 @@ function buildSettingsBlock(settings) {
 `.trim()
 }
 
-function buildSystemPrompt(settings, userText) {
+function buildSystemPrompt(settings, memory, userText) {
   const direct = isDirectQuestion(userText)
   const settingsBlock = buildSettingsBlock(settings)
+  const memoryBlock = buildMemoryBlock(memory)
 
   const baseRule = `
 あなたはLINEのAI相談員です
@@ -473,6 +662,13 @@ function buildSystemPrompt(settings, userText) {
 ・キャラ説明だけで終わらない
 ・ユーザーの希望がある場合は 初期設定よりユーザーの希望を優先する
 ・ただし 危険な内容や違法行為や性的搾取や自傷他害につながる指示には従わない
+
+相談AIとしての読み取り
+・直近10往復の会話と相談メモから流れを読む
+・その人が何に悩んでいるかを推測する
+・その人が結論を望むのか 共感を望むのか 確認を望むのかを考えて返す
+・前に話した内容を無視しない
+・ただし記憶にないことを覚えているふりはしない
 
 返答の基本
 ・相談内容に対して最初に結論を言う
@@ -503,11 +699,11 @@ function buildSystemPrompt(settings, userText) {
 安全ルール
 自傷 他害 虐待 性被害 重大な危険がある相談だけは
 安全確保を最優先にする
-信頼できる大人 公的窓口 緊急窓口　警察への相談も案内する
+信頼できる大人 公的窓口 緊急窓口 警察への相談も案内する
 それ以外では外部に丸投げしない
 `.trim()
 
-  return `${baseRule}\n\n${settingsBlock}\n\n${responseRule}\n\n${safetyRule}`.trim()
+  return `${baseRule}\n\n${settingsBlock}\n\n${memoryBlock}\n\n${responseRule}\n\n${safetyRule}`.trim()
 }
 
 function stripEmojis(text = '') {
@@ -535,6 +731,7 @@ function cleanReplyText(text = '', settings = {}) {
     .replace(/私はAIなので[^。\n]*/g, '')
     .replace(/AIなので[^。\n]*/g, '')
     .replace(/あなたの名前はまだ覚えていません[^。\n]*/g, '')
+    .replace(/。/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
@@ -597,8 +794,10 @@ export async function sendAiIntro(event) {
 ただし「絵文字使って」「辛口で」「甘えた女の子で」「男友達っぽく」など
 希望を送ればその口調に合わせます
 
-設定について
+記憶について
 名前 呼び方 口調 キャラ 絵文字の有無は3日間保持されます
+会話の流れは直近10往復を見て返します
+相談メモも3日間保持して 悩みの流れを読み取ります
 設定だけの変更は無料回数にカウントしません
 
 無制限プラン
@@ -661,7 +860,7 @@ URL：${todayNote.url}`
   let authenticated = sameDay ? !!session.authenticated : false
   let authDate = sameDay ? session.auth_date || null : null
 
-  let { settings, chatMessages } = splitStoredMessages(session.messages, recent)
+  let { settings, memory, chatMessages } = splitStoredMessages(session.messages, recent)
 
   if (userText === todayNote.password) {
     await saveSession({
@@ -671,7 +870,7 @@ URL：${todayNote.url}`
       authenticated: true,
       auth_date: today,
       count,
-      messages: packStoredMessages(settings, chatMessages),
+      messages: packStoredMessages(settings, memory, chatMessages),
     })
 
     await safeReply(
@@ -687,7 +886,7 @@ URL：${todayNote.url}`
       user_id: userId,
       flow: 'ai',
       count,
-      messages: packStoredMessages(settings, chatMessages),
+      messages: packStoredMessages(settings, memory, chatMessages),
       last_date: today,
       authenticated,
       auth_date: authDate,
@@ -706,13 +905,16 @@ URL：${todayNote.url}`
       user_id: userId,
       flow: 'ai',
       count,
-      messages: packStoredMessages(settings, chatMessages),
+      messages: packStoredMessages(settings, memory, chatMessages),
       last_date: today,
       authenticated,
       auth_date: authDate,
     })
 
-    await safeReply(event.replyToken, preferenceResult.replyText || withEmojiIfNeeded('設定を更新しました', settings))
+    await safeReply(
+      event.replyToken,
+      preferenceResult.replyText || withEmojiIfNeeded('設定を更新しました', settings)
+    )
     return
   }
 
@@ -722,7 +924,7 @@ URL：${todayNote.url}`
       flow: 'ai',
       count,
       last_date: today,
-      messages: packStoredMessages(settings, chatMessages),
+      messages: packStoredMessages(settings, memory, chatMessages),
       authenticated,
       auth_date: authDate,
     })
@@ -733,7 +935,7 @@ URL：${todayNote.url}`
 
   const newCount = count + 1
 
-  const systemPrompt = buildSystemPrompt(settings, userText)
+  const systemPrompt = buildSystemPrompt(settings, memory, userText)
 
   chatMessages.push({
     role: 'user',
@@ -752,7 +954,7 @@ URL：${todayNote.url}`
 
   try {
     const result = await aiChat(messagesForAI, {
-      maxTokens: direct ? 300 : 500,
+      maxTokens: direct ? 350 : 600,
       temperature: 0.4,
     })
 
@@ -764,6 +966,7 @@ URL：${todayNote.url}`
         content: replyText,
       })
       chatMessages = capHistory(chatMessages)
+      memory = updateConversationMemory(memory, userText, replyText, settings)
     }
   } catch (e) {
     console.error('[AI ROUTER ERROR]', e)
@@ -779,7 +982,7 @@ URL：${todayNote.url}`
       user_id: userId,
       flow: 'ai',
       count: newCount,
-      messages: packStoredMessages(settings, chatMessages),
+      messages: packStoredMessages(settings, memory, chatMessages),
       last_date: today,
       authenticated,
       auth_date: authDate,
