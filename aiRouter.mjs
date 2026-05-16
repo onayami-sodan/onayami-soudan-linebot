@@ -1,7 +1,7 @@
 /*
  =========================
-   aiRouter.js｜AI相談専用 完全版
-   note日替わりパス / 5回制限 / 人格固定 / 履歴4往復
+   aiRouter.mjs｜AI相談専用 完全版
+   note日替わりパス / 5回制限 / 人格固定 / 履歴4往復 / 絵文字なし
  =========================
 */
 
@@ -15,6 +15,23 @@ const ADMIN_SECRET = 'azu1228'
 const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
 const MAX_HISTORY_PAIRS = 4
+
+const FIFTH_TURN_GUIDE_TEXT =
+  `ここまでが本日の無料相談の5回目です
+
+続けて相談したい場合は
+下の購入ページから本日の合言葉を入手して
+LINEに入力してください`
+
+function buildLimitOnlyText(todayNote) {
+  return `今日は無料分を使い切っています
+
+明日になればまた5回まで話せます
+
+続けて相談したい場合は
+こちらから本日の合言葉を入手してください
+${todayNote.url}`
+}
 
 const noteList = [
   { password: 'neko12', url: 'https://note.com/noble_loris1361/n/nb55e92147e54' },
@@ -53,21 +70,22 @@ const noteList = [
 export async function sendAiIntro(event) {
   await safeReply(event.replyToken, {
     type: 'text',
-    text: `🌸 AI相談室のご案内 🌸
+    text: `AI相談室のご案内
 
 恋愛 人間関係 家庭 学校 気持ちの整理など
 誰にも言いにくい悩みを相談できます
 
-⚖️ ご利用について
+ご利用について
 ・1日5往復まで無料
-・5回を超えると購入ページが表示されます
+・5回目はAIの返答後に購入案内が表示されます
+・6回目以降は購入案内のみ表示されます
 
-💡 無制限プラン
+無制限プラン
 購入ページで本日の合言葉を取得して
 その合言葉をLINEに入力すると
 その日限定でAI相談が無制限になります
 
-相談したいことをそのまま送ってね`,
+相談したいことをそのまま送ってください`,
   })
 }
 
@@ -160,6 +178,7 @@ function buildSystemPrompt(persona, userText) {
 ・共感だけで終わらせない
 ・曖昧に逃げない
 ・「ズバッと」という言葉は使わない
+・絵文字は使わない
 ・最後に今やることを1つだけ伝える
 `.trim()
     : `
@@ -170,6 +189,7 @@ function buildSystemPrompt(persona, userText) {
 ・共感だけで終わらせない
 ・曖昧な励ましで逃げない
 ・「ズバッと」という言葉は使わない
+・絵文字は使わない
 ・長文にしすぎない
 `.trim()
 
@@ -186,7 +206,7 @@ function buildSystemPrompt(persona, userText) {
 
 async function replyPhoneInfo(event) {
   const text =
-    '電話でも相談できます📞\n' +
+    '電話でも相談できます\n' +
     'リッチメニューの「予約」から予約してください\n' +
     'お電話はAIではなく人の相談員が対応します'
 
@@ -226,7 +246,9 @@ export async function handleAI(event) {
   if (userText === ADMIN_SECRET) {
     await safeReply(
       event.replyToken,
-      `✨ 管理者モード\n本日(${today})のnoteパスワードは「${todayNote.password}」\nURL：${todayNote.url}`
+      `管理者モード
+本日(${today})のnoteパスワードは「${todayNote.password}」
+URL：${todayNote.url}`
     )
     return
   }
@@ -258,7 +280,7 @@ export async function handleAI(event) {
   const sameDay = session.last_date === today
   const recent = isRecent(session.updated_at)
 
-  let count = sameDay ? session.count || 0 : 0
+  let count = sameDay ? Number(session.count || 0) : 0
   let authenticated = sameDay ? !!session.authenticated : false
   let authDate = sameDay ? session.auth_date || null : null
   let messages = recent ? session.messages || [] : []
@@ -270,34 +292,33 @@ export async function handleAI(event) {
       last_date: today,
       authenticated: true,
       auth_date: today,
+      count,
+      messages,
     })
 
     await safeReply(
       event.replyToken,
-      '合言葉が確認できたよ\n今日は回数制限なしでお話しできるよ'
+      '合言葉が確認できました\n今日は回数制限なしでお話しできます'
     )
     return
   }
 
-  const newCount = count + 1
-
-  if (!authenticated && newCount > 5) {
+  if (!authenticated && count >= 5) {
     await saveSession({
       ...session,
       flow: 'ai',
-      count: newCount,
+      count,
       last_date: today,
       messages,
       authenticated,
       auth_date: authDate,
     })
 
-    await safeReply(
-      event.replyToken,
-      `今日は無料分を使い切ったよ\n明日になればまた5回まで話せるよ\n\n続けて相談したい場合は、こちらから本日の合言葉を入手してね\n${todayNote.url}`
-    )
+    await safeReply(event.replyToken, buildLimitOnlyText(todayNote))
     return
   }
+
+  const newCount = count + 1
 
   const persona = await getCharacterPrompt(userId)
   const systemPrompt = buildSystemPrompt(persona, userText)
@@ -335,7 +356,11 @@ export async function handleAI(event) {
     }
   } catch (e) {
     console.error('[AI ROUTER ERROR]', e)
-    replyText = 'うまく返せなかったから もう一度だけ送ってね'
+    replyText = 'うまく返せませんでした\nもう一度だけ送ってください'
+  }
+
+  if (!authenticated && newCount === 5) {
+    replyText = `${replyText}\n\n${FIFTH_TURN_GUIDE_TEXT}\n${todayNote.url}`
   }
 
   try {
