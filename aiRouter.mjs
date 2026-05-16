@@ -1,7 +1,8 @@
 /*
  =========================
    aiRouter.mjs｜AI相談専用 完全版
-   note日替わりパス / 5回制限 / 3日保持 / ユーザー設定固定保存 / 履歴10往復 / 相談メモ保持
+   note日替わりパス / 5回制限 / 3日保持 / ユーザー設定固定保存
+   履歴10往復 / 相談メモ保持 / 軽い性的恋愛相談対応 / 単調返答防止
  =========================
 */
 
@@ -265,11 +266,47 @@ function isPhoneInquiry(text = '') {
 }
 
 function isDirectQuestion(text = '') {
-  return /どう思う|どうすれば|どうしたら|した方がいい|あり？|OK？|本気？|好き？|脈あり|脈なし|浮気|別れる|復縁|やめた方がいい|付き合う|告白|連絡|不倫|都合いい|遊び|本命|冷めた|待つべき|諦める/i.test(text)
+  return /どう思う|どうすれば|どうしたら|した方がいい|あり？|OK？|本気？|好き？|脈あり|脈なし|浮気|別れる|復縁|やめた方がいい|付き合う|告白|連絡|不倫|都合いい|遊び|本命|冷めた|待つべき|諦める|気持ちわかる|気持ち分かる/i.test(text)
+}
+
+function isLightSexualRomanceQuestion(text = '') {
+  const s = String(text || '')
+
+  return /エッチ|性的|性欲|キス|ハグ|抱きしめ|おっぱい|胸|乳首|触る|触られ|気持ちいい|気持ち良い|下ネタ|ムラムラ|ドキドキ|スキンシップ|ボディタッチ/.test(s)
+}
+
+function isUnsafeSexualRequest(text = '') {
+  const s = String(text || '')
+
+  const hasSexual = isLightSexualRomanceQuestion(s) || /セックス|性行為|裸|脱がせ|襲う|犯す|レイプ|盗撮|無理やり|寝てる間|酔わせ|同意なし|嫌がる/.test(s)
+  const hasMinor = /未成年|中学生|高校生|小学生|子ども|子供|児童|園児|幼児|18歳未満|17歳|16歳|15歳|14歳|13歳|12歳/.test(s)
+  const hasCoercion = /無理やり|嫌がる|同意なし|寝てる|酔ってる|断られた|拒否|盗撮|脅す|バレずに|こっそり/.test(s)
+  const hasExplicitHowTo = /やり方|方法|手順|攻め方|テクニック|感じさせ方|イかせ方|脱がせ方|触り方.*詳しく|具体的に.*触/.test(s)
+
+  return hasSexual && (hasMinor || hasCoercion || hasExplicitHowTo)
+}
+
+function buildUnsafeSexualReply(settings) {
+  return withEmojiIfNeeded(
+    `その内容は相手の同意や安全がかなり大事になる話だから 具体的なやり方としては答えられないよ
+
+大事なのは 相手が嫌がっていないか 無理をしていないかを先に確認すること
+
+恋愛の距離感や聞き方なら一緒に考えられるよ`,
+    settings
+  )
+}
+
+function isImageRequest(text = '') {
+  return /画像|イラスト|写真|絵|作れる|生成|描ける/.test(String(text || ''))
+}
+
+function isFortuneRequest(text = '') {
+  return /占い|運勢|誕生日|生年月日|相性占い|星座|手相/.test(String(text || ''))
 }
 
 function hasConsultationWord(text = '') {
-  return /悩み|相談|好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|学校|友達|親|家族|仕事|職場|死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|怖い|不安|寂しい|どう思う|どうすれば|どうしたら|した方がいい|本気|遊び|都合いい|占い|運勢|相性|誕生日|画像|作れる/i.test(text)
+  return /悩み|相談|好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|学校|友達|親|家族|仕事|職場|死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|怖い|不安|寂しい|どう思う|どうすれば|どうしたら|した方がいい|本気|遊び|都合いい|占い|運勢|相性|誕生日|画像|作れる|エッチ|性的|性欲|キス|ハグ|おっぱい|胸|乳首|触る|触られ|気持ちいい|気持ち良い|下ネタ|スキンシップ|ボディタッチ/i.test(text)
 }
 
 function hasStyleWord(text = '') {
@@ -459,6 +496,10 @@ function applyPreferenceUpdates(settings, userText) {
 function detectTopic(text = '') {
   const s = String(text || '')
 
+  if (isLightSexualRomanceQuestion(s)) {
+    return '性的恋愛相談'
+  }
+
   if (/好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|本気|遊び|都合いい|相性/.test(s)) {
     return '恋愛'
   }
@@ -498,6 +539,7 @@ function detectEmotion(text = '') {
   if (/不安|怖い|心配/.test(s)) return '不安が強く安心材料と具体策を求めている'
   if (/寂しい|さみしい|孤独/.test(s)) return '寂しさが強く寄り添いを求めている'
   if (/怒り|ムカつく|腹立つ|許せない/.test(s)) return '怒りが強く気持ちの整理を必要としている'
+  if (isLightSexualRomanceQuestion(s)) return '軽い性的な興味や確認したい気持ちがある'
 
   return ''
 }
@@ -505,17 +547,22 @@ function detectEmotion(text = '') {
 function detectPreferredResponse(text = '', settings = {}) {
   const s = String(text || '')
   const notes = Array.isArray(settings.styleNotes) ? settings.styleNotes.join(' ') : ''
+  const combined = `${s} ${notes} ${settings.character || ''}`
 
-  if (/辛口|厳しく|ハッキリ|はっきり|結論/.test(s + notes)) {
+  if (/辛口|厳しく|ハッキリ|はっきり|結論/.test(combined)) {
     return '共感よりも結論を先に出す返答を望んでいる'
   }
 
-  if (/優しく|やさしく|甘えた|彼女っぽく|恋人っぽく/.test(s + notes + settings.character)) {
+  if (/優しく|やさしく|甘えた|彼女っぽく|恋人っぽく/.test(combined)) {
     return '優しく受け止めながらも最後は具体的に導く返答を望んでいる'
   }
 
   if (/短く|簡潔|一言/.test(s)) {
     return '短く簡潔な返答を望んでいる'
+  }
+
+  if (isLightSexualRomanceQuestion(s)) {
+    return '軽い性的恋愛相談にも逃げずに自然に答えてほしい'
   }
 
   return ''
@@ -556,12 +603,16 @@ function updateConversationMemory(memory, userText, replyText, settings) {
     next.preferredResponse = preferred
   }
 
-  if (/彼氏|彼女|元彼|元カノ|好きな人|旦那|嫁|妻|夫|友達|親|母|父|上司|同僚/.test(s)) {
+  if (/彼氏|彼女|元彼|元カノ|好きな人|旦那|嫁|妻|夫|友達|親|母|父|上司|同僚|女の子|男の子|相手/.test(s)) {
     next.relationshipContext = cleanShortText(s, 120)
   }
 
-  if (/曖昧|一般論|それだけ|違う|そうじゃない|むちゃくちゃ|おかしい|嫌/.test(s)) {
-    next.avoidResponse = '曖昧な一般論や設定説明だけの返答は避ける'
+  if (/曖昧|一般論|それだけ|違う|そうじゃない|むちゃくちゃ|おかしい|嫌|単調|同じこと/.test(s)) {
+    next.avoidResponse = '曖昧な一般論 同じ締め方 設定説明だけの返答は避ける'
+  }
+
+  if (isLightSexualRomanceQuestion(s)) {
+    next.avoidResponse = '性的恋愛相談では完全にぼかさず 同意と安心を軸に自然に答える'
   }
 
   const advice = cleanShortText(replyText, 140)
@@ -637,10 +688,85 @@ function buildSettingsBlock(settings) {
 `.trim()
 }
 
-function buildSystemPrompt(settings, memory, userText) {
+function buildRecentFlowBlock(chatMessages = []) {
+  const recentUserMessages = Array.isArray(chatMessages)
+    ? chatMessages
+        .filter((m) => m.role === 'user')
+        .slice(-6)
+        .map((m) => `・${String(m.content || '').slice(0, 80)}`)
+        .join('\n')
+    : ''
+
+  return `
+直近のユーザー発言
+${recentUserMessages || 'まだ少ない'}
+
+「今の気持ちわかる？」と聞かれた時は
+この直近の発言から気持ちを推測して答える
+まったく関係ない仕事 学校 家族の話を勝手に作らない
+`.trim()
+}
+
+function buildTopicGuidance(userText) {
+  const s = String(userText || '')
+  const blocks = []
+
+  if (isLightSexualRomanceQuestion(s)) {
+    blocks.push(`
+軽い性的恋愛相談の返答ルール
+・大人同士の軽い性的な恋愛相談は完全拒否しない
+・下品にしすぎず 自然に答える
+・露骨な手順や興奮させる具体的な方法は説明しない
+・「人による」と伝えたうえで 安心 同意 雰囲気 相手の反応を軸に答える
+・毎回「コミュニケーションが大事」だけで終わらない
+・同じ「反応を見てね」で締め続けない
+・質問が軽い時は軽めに でも逃げずに答える
+・未成年 同意なし 強要 盗撮 酔っている 寝ている相手の話は止める
+`.trim())
+  }
+
+  if (isImageRequest(s)) {
+    blocks.push(`
+画像相談の返答ルール
+・このLINEで画像生成機能が未実装なら 画像そのものは作れないと短く伝える
+・ただし画像の案 文面 プロンプト 構図 アイデア作りは手伝えると伝える
+・できないことを長く謝らない
+`.trim())
+  }
+
+  if (isFortuneRequest(s)) {
+    blocks.push(`
+占い相談の返答ルール
+・占いは参考として自然に答える
+・「得意じゃない」と逃げない
+・断定しすぎず 今日の行動に落とし込む
+・誕生日や日付がある場合は 占い風に短く返す
+`.trim())
+  }
+
+  if (/気持ちわかる|気持ち分かる|今の気持ち/.test(s)) {
+    blocks.push(`
+気持ち推測の返答ルール
+・直近の会話から今の気持ちを推測して答える
+・「多分」「今は〜が混ざってると思う」のように決めつけすぎない
+・まったく関係ない状況を作らない
+・最後に今どうしたらいいかを1つだけ添える
+`.trim())
+  }
+
+  if (!blocks.length) {
+    return ''
+  }
+
+  return blocks.join('\n\n')
+}
+
+function buildSystemPrompt(settings, memory, userText, chatMessages = []) {
   const direct = isDirectQuestion(userText)
   const settingsBlock = buildSettingsBlock(settings)
   const memoryBlock = buildMemoryBlock(memory)
+  const recentFlowBlock = buildRecentFlowBlock(chatMessages)
+  const topicGuidance = buildTopicGuidance(userText)
 
   const baseRule = `
 あなたはLINEのAI相談員です
@@ -669,6 +795,15 @@ function buildSystemPrompt(settings, memory, userText) {
 ・その人が結論を望むのか 共感を望むのか 確認を望むのかを考えて返す
 ・前に話した内容を無視しない
 ・ただし記憶にないことを覚えているふりはしない
+
+単調返答防止
+・毎回同じ言い回しで返さない
+・毎回「まずは」で始めない
+・毎回「相手の反応を見て」で終わらない
+・質問が軽い時は軽く自然に返す
+・質問が深い時だけ丁寧に返す
+・安全説明だけで会話を終わらせない
+・必要なら具体的な聞き方や考え方を1つだけ出す
 
 返答の基本
 ・相談内容に対して最初に結論を言う
@@ -703,7 +838,18 @@ function buildSystemPrompt(settings, memory, userText) {
 それ以外では外部に丸投げしない
 `.trim()
 
-  return `${baseRule}\n\n${settingsBlock}\n\n${memoryBlock}\n\n${responseRule}\n\n${safetyRule}`.trim()
+  return [
+    baseRule,
+    settingsBlock,
+    memoryBlock,
+    recentFlowBlock,
+    topicGuidance,
+    responseRule,
+    safetyRule,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
 }
 
 function stripEmojis(text = '') {
@@ -799,6 +945,10 @@ export async function sendAiIntro(event) {
 会話の流れは直近10往復を見て返します
 相談メモも3日間保持して 悩みの流れを読み取ります
 設定だけの変更は無料回数にカウントしません
+
+相談できる内容
+恋愛相談や軽い性的な恋愛相談にも自然に答えます
+ただし未成年 同意なし 強要 盗撮 露骨な手順説明は扱えません
 
 無制限プラン
 購入ページで本日の合言葉を取得して
@@ -918,6 +1068,22 @@ URL：${todayNote.url}`
     return
   }
 
+  if (isUnsafeSexualRequest(userText)) {
+    await saveSession({
+      ...session,
+      user_id: userId,
+      flow: 'ai',
+      count,
+      messages: packStoredMessages(settings, memory, chatMessages),
+      last_date: today,
+      authenticated,
+      auth_date: authDate,
+    })
+
+    await safeReply(event.replyToken, buildUnsafeSexualReply(settings))
+    return
+  }
+
   if (!authenticated && count >= 5) {
     await saveSession({
       ...session,
@@ -935,13 +1101,13 @@ URL：${todayNote.url}`
 
   const newCount = count + 1
 
-  const systemPrompt = buildSystemPrompt(settings, memory, userText)
-
   chatMessages.push({
     role: 'user',
     content: userText,
   })
   chatMessages = capHistory(chatMessages)
+
+  const systemPrompt = buildSystemPrompt(settings, memory, userText, chatMessages)
 
   const messagesForAI = [
     { role: 'system', content: systemPrompt },
@@ -955,7 +1121,7 @@ URL：${todayNote.url}`
   try {
     const result = await aiChat(messagesForAI, {
       maxTokens: direct ? 350 : 600,
-      temperature: 0.4,
+      temperature: isLightSexualRomanceQuestion(userText) ? 0.55 : 0.4,
     })
 
     replyText = cleanReplyText(result.text, settings)
