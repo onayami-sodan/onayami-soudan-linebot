@@ -1,10 +1,9 @@
 /*
  =========================
-   aiRouter.mjs｜AI相談専用 完全版
+   aiRouter.mjs｜AI相談専用 軽量自然会話版
    note日替わりパス / 7回制限 / 設定固定保存
-   履歴10往復 / 相談メモ3日保持 / 軽い性的恋愛相談対応 / 単調返答防止
+   履歴10往復 / 相談メモ3日保持 / 名前保存強化
    占い・恋愛診断の自然誘導 1日1回
-   名前・呼び名の固定保存 強化版
  =========================
 */
 
@@ -16,6 +15,7 @@ import { isOpen } from './featureFlags.js'
 const ADMIN_SECRET = 'azu1228'
 const RESERVE_URL = process.env.RESERVE_URL || ''
 const SESSION_TABLE = 'user_sessions'
+
 const MAX_HISTORY_PAIRS = 10
 const FREE_LIMIT = 7
 
@@ -145,6 +145,12 @@ function normalizeMemory(memory = {}) {
   return {
     ...base,
     ...source,
+    mainConcern: String(source.mainConcern || ''),
+    emotionalState: String(source.emotionalState || ''),
+    preferredResponse: String(source.preferredResponse || ''),
+    relationshipContext: String(source.relationshipContext || ''),
+    lastAdvice: String(source.lastAdvice || ''),
+    avoidResponse: String(source.avoidResponse || ''),
     topics: Array.isArray(source.topics) ? source.topics.slice(0, 8) : [],
     importantFacts: Array.isArray(source.importantFacts) ? source.importantFacts.slice(0, 10) : [],
   }
@@ -164,8 +170,11 @@ function normalizePromo(promo = {}) {
 
 function isRecent(ts) {
   if (!ts) return false
-  const diff = Date.now() - new Date(ts).getTime()
-  return diff < 3 * 24 * 60 * 60 * 1000
+
+  const time = new Date(ts).getTime()
+  if (Number.isNaN(time)) return false
+
+  return Date.now() - time < 3 * 24 * 60 * 60 * 1000
 }
 
 function getJapanDateString() {
@@ -182,8 +191,7 @@ function getTodayNoteStable() {
     hash = today.charCodeAt(i) + ((hash << 5) - hash)
   }
 
-  const index = Math.abs(hash) % noteList.length
-  return noteList[index]
+  return noteList[Math.abs(hash) % noteList.length]
 }
 
 function capHistory(messages) {
@@ -193,9 +201,9 @@ function capHistory(messages) {
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
     .map((m) => ({
       role: m.role,
-      content: String(m.content || ''),
+      content: String(m.content || '').trim(),
     }))
-    .filter((m) => m.content.trim())
+    .filter((m) => m.content)
     .slice(-(MAX_HISTORY_PAIRS * 2))
 }
 
@@ -210,27 +218,15 @@ function splitStoredMessages(storedMessages, recent) {
   }
 
   const settingsItem = storedMessages.find(
-    (m) =>
-      m &&
-      m.role === SETTINGS_ROLE &&
-      m.content &&
-      m.content.type === SETTINGS_TYPE
+    (m) => m?.role === SETTINGS_ROLE && m?.content?.type === SETTINGS_TYPE
   )
 
   const memoryItem = storedMessages.find(
-    (m) =>
-      m &&
-      m.role === MEMORY_ROLE &&
-      m.content &&
-      m.content.type === MEMORY_TYPE
+    (m) => m?.role === MEMORY_ROLE && m?.content?.type === MEMORY_TYPE
   )
 
   const promoItem = storedMessages.find(
-    (m) =>
-      m &&
-      m.role === PROMO_ROLE &&
-      m.content &&
-      m.content.type === PROMO_TYPE
+    (m) => m?.role === PROMO_ROLE && m?.content?.type === PROMO_TYPE
   )
 
   // 名前 呼び方 口調 絵文字 キャラは3日判定に関係なく残す
@@ -241,9 +237,7 @@ function splitStoredMessages(storedMessages, recent) {
     ? normalizeMemory(memoryItem?.content?.data || {})
     : getDefaultMemory()
 
-  const chatMessages = recent
-    ? capHistory(storedMessages)
-    : []
+  const chatMessages = recent ? capHistory(storedMessages) : []
 
   // promoは1日1回判定用なので保持
   const promo = normalizePromo(promoItem?.content?.data || {})
@@ -323,6 +317,49 @@ async function saveSession(session) {
   if (error) throw error
 }
 
+function stripEmojis(text = '') {
+  return String(text || '')
+    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function withEmojiIfNeeded(text, settings) {
+  const clean = String(text || '').trim()
+  const s = normalizeSettings(settings)
+
+  if (s.emojiMode === 'on') {
+    return /[\p{Extended_Pictographic}]/u.test(clean) ? clean : `${clean} 😊`
+  }
+
+  return stripEmojis(clean)
+}
+
+function cleanReplyText(text = '', settings = {}) {
+  const s = normalizeSettings(settings)
+
+  let out = String(text || '')
+    .replace(/私はAIなので[^。\n]*/g, '')
+    .replace(/AIなので[^。\n]*/g, '')
+    .replace(/ルールで[^。\n]*/g, '')
+    .replace(/設定上[^。\n]*/g, '')
+    .replace(/あなたの名前はまだ覚えていません[^。\n]*/g, '')
+    .replace(/。/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  if (s.emojiMode === 'off') {
+    out = stripEmojis(out)
+  }
+
+  if (!s.callName) {
+    out = out.replace(/たっくん[、,。 ]*/g, '')
+  }
+
+  return out.trim()
+}
+
 function isPhoneInquiry(text = '') {
   const s = String(text || '').toLowerCase().replace(/\s+/g, '')
 
@@ -341,9 +378,7 @@ function isDirectQuestion(text = '') {
 }
 
 function isLightSexualRomanceQuestion(text = '') {
-  const s = String(text || '')
-
-  return /エッチ|性的|性欲|キス|ハグ|抱きしめ|おっぱい|胸|乳首|触る|触られ|気持ちいい|気持ち良い|下ネタ|ムラムラ|ドキドキ|スキンシップ|ボディタッチ/.test(s)
+  return /エッチ|性的|性欲|キス|ハグ|抱きしめ|おっぱい|胸|乳首|触る|触られ|気持ちいい|気持ち良い|下ネタ|ムラムラ|ドキドキ|スキンシップ|ボディタッチ/.test(String(text || ''))
 }
 
 function isUnsafeSexualRequest(text = '') {
@@ -367,11 +402,12 @@ function isUnsafeSexualRequest(text = '') {
 
 function buildUnsafeSexualReply(settings) {
   return withEmojiIfNeeded(
-    `その内容は相手の同意や安全がかなり大事になる話だから 具体的なやり方としては答えられないよ
+    `その気持ち自体は否定しないよ
 
-大事なのは 相手が嫌がっていないか 無理をしていないかを先に確認すること
+でもその内容は 相手の同意や年齢や安全がかなり大事になる話だから
+具体的なやり方としては答えられない
 
-恋愛の距離感や聞き方なら一緒に考えられるよ`,
+恋愛の距離感や断り方 不安の伝え方なら一緒に考えられるよ`,
     settings
   )
 }
@@ -396,11 +432,11 @@ function isAskingName(text = '') {
   const s = String(text || '').trim()
 
   return (
-    /(俺|僕|私|うち|自分)?の?名前.*(覚えてる|覚えた|知ってる|わかる|分かる)/i.test(s) ||
-    /(俺|僕|私|うち|自分)?の?名前(?:は|って)?[？?]?$/i.test(s) ||
-    /^名前(?:は|って)?[？?]$/i.test(s) ||
+    /(俺|僕|私|うち|自分)?の?名前.*(覚えてる|覚えた|知ってる|わかる|分かる|言って|教えて|なに|何|だれ|誰)/i.test(s) ||
+    /(俺|僕|私|うち|自分)?の?名前(?:は|って|なに|何)?[？?]?$/i.test(s) ||
+    /^名前(?:は|って|なに|何)?[？?]$/i.test(s) ||
     /なんて呼べば/i.test(s) ||
-    /呼び名.*(覚えてる|覚えた|知ってる|わかる|分かる)/i.test(s)
+    /呼び名.*(覚えてる|覚えた|知ってる|わかる|分かる|言って|教えて)/i.test(s)
   )
 }
 
@@ -408,14 +444,21 @@ function extractName(text = '', chatMessages = []) {
   const s = String(text || '').trim()
 
   if (!s) return ''
-  if (/覚えてる|覚えた|知ってる|わかる|分かる|\?|？/.test(s)) return ''
 
-  const lastAssistant = Array.isArray(chatMessages)
-    ? [...chatMessages].reverse().find((m) => m.role === 'assistant')?.content || ''
+  // 名前を聞いている文は絶対に登録しない
+  if (/覚えてる|覚えた|知ってる|わかる|分かる|言って|教えて|なに|何|だれ|誰|\?|？/.test(s)) {
+    return ''
+  }
+
+  const recentText = Array.isArray(chatMessages)
+    ? chatMessages
+        .slice(-4)
+        .map((m) => String(m.content || ''))
+        .join('\n')
     : ''
 
-  const botAskedName =
-    /呼んでほしい名前|名前があれば教えて|名前を教えて|教えてもらってない/.test(lastAssistant)
+  const nameContext =
+    /名前|呼んでほしい|なんて呼べば|教えてもらってない/.test(recentText)
 
   const patterns = [
     /(?:俺|僕|私|うち|自分)の名前(?:は|が)?\s*([^\s、。！？!?]{1,20})(?:だよ|です|やで|だ|ね|$)/,
@@ -430,20 +473,20 @@ function extractName(text = '', chatMessages = []) {
 
     if (
       value &&
-      !/名前|覚えて|覚えた|呼んで|誰|何|ですか|だれ|なに|おはよう|こんにちは|こんばんは|\?|？/.test(value)
+      !/名前|覚えて|覚えた|呼んで|誰|何|なに|だれ|言って|教えて|おはよう|こんにちは|こんばんは|\?|？/.test(value)
     ) {
       return value
     }
   }
 
-  // 直前にBotが名前を聞いた時だけ「たっくんだよ」単体を名前として拾う
-  if (botAskedName) {
+  // 直近で名前の話をしている時だけ「たっくんだよ」単体を名前として拾う
+  if (nameContext) {
     const match = s.match(/^([^\s、。！？!?]{1,20})(?:だよ|です|やで|だ)$/)
     const value = match?.[1]?.trim()
 
     if (
       value &&
-      !/おはよう|こんにちは|こんばんは|そう|うん|いや|違う|名前|相談|はじめる|AI相談/.test(value)
+      !/おはよう|こんにちは|こんばんは|そう|うん|いや|違う|名前|相談|はじめる|AI相談|言ってみて/.test(value)
     ) {
       return value
     }
@@ -606,37 +649,14 @@ function applyPreferenceUpdates(settings, userText, chatMessages = []) {
 function detectTopic(text = '') {
   const s = String(text || '')
 
-  if (isLightSexualRomanceQuestion(s)) {
-    return '性的恋愛相談'
-  }
-
-  if (/好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|本気|遊び|都合いい|相性/.test(s)) {
-    return '恋愛'
-  }
-
-  if (/学校|友達|クラス|先生|部活|勉強|受験/.test(s)) {
-    return '学校 友人関係'
-  }
-
-  if (/親|家族|母|父|兄|姉|弟|妹|家庭/.test(s)) {
-    return '家庭 家族'
-  }
-
-  if (/仕事|職場|上司|同僚|バイト|給料|転職/.test(s)) {
-    return '仕事 職場'
-  }
-
-  if (/死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|不安|怖い|寂しい|眠れない/.test(s)) {
-    return 'メンタル'
-  }
-
-  if (/占い|運勢|誕生日|生年月日/.test(s)) {
-    return '占い'
-  }
-
-  if (/画像|イラスト|写真|作れる|生成/.test(s)) {
-    return '画像相談'
-  }
+  if (isLightSexualRomanceQuestion(s)) return '性的恋愛相談'
+  if (/好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|本気|遊び|都合いい|相性/.test(s)) return '恋愛'
+  if (/学校|友達|クラス|先生|部活|勉強|受験/.test(s)) return '学校 友人関係'
+  if (/親|家族|母|父|兄|姉|弟|妹|家庭/.test(s)) return '家庭 家族'
+  if (/仕事|職場|上司|同僚|バイト|給料|転職/.test(s)) return '仕事 職場'
+  if (/死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|不安|怖い|寂しい|眠れない/.test(s)) return 'メンタル'
+  if (/占い|運勢|誕生日|生年月日/.test(s)) return '占い'
+  if (/画像|イラスト|写真|作れる|生成/.test(s)) return '画像相談'
 
   return ''
 }
@@ -656,23 +676,19 @@ function detectEmotion(text = '') {
 
 function detectPreferredResponse(text = '', settings = {}) {
   const s = String(text || '')
-  const notes = Array.isArray(settings.styleNotes) ? settings.styleNotes.join(' ') : ''
-  const combined = `${s} ${notes} ${settings.character || ''}`
+  const st = normalizeSettings(settings)
+  const combined = `${s} ${st.character} ${st.styleNotes.join(' ')}`
 
   if (/辛口|厳しく|ハッキリ|はっきり|結論/.test(combined)) {
-    return '共感よりも結論を先に出す返答を望んでいる'
+    return 'はっきりめの返答を望んでいる'
   }
 
   if (/優しく|やさしく|甘えた|彼女っぽく|恋人っぽく/.test(combined)) {
-    return '優しく受け止めながらも最後は具体的に導く返答を望んでいる'
+    return '優しく受け止める返答を望んでいる'
   }
 
   if (/短く|簡潔|一言/.test(s)) {
     return '短く簡潔な返答を望んでいる'
-  }
-
-  if (isLightSexualRomanceQuestion(s)) {
-    return '軽い性的恋愛相談にも逃げずに自然に答えてほしい'
   }
 
   return ''
@@ -690,6 +706,7 @@ function cleanShortText(text = '', max = 120) {
 function updateConversationMemory(memory, userText, replyText, settings) {
   const next = normalizeMemory(memory)
   const s = String(userText || '').trim()
+
   const topic = detectTopic(s)
   const emotion = detectEmotion(s)
   const preferred = detectPreferredResponse(s, settings)
@@ -700,103 +717,73 @@ function updateConversationMemory(memory, userText, replyText, settings) {
 
   if (hasConsultationWord(s)) {
     const shortConcern = cleanShortText(s, 120)
-    if (shortConcern) {
-      next.mainConcern = shortConcern
-    }
+    if (shortConcern) next.mainConcern = shortConcern
   }
 
-  if (emotion) {
-    next.emotionalState = emotion
-  }
-
-  if (preferred) {
-    next.preferredResponse = preferred
-  }
+  if (emotion) next.emotionalState = emotion
+  if (preferred) next.preferredResponse = preferred
 
   if (/彼氏|彼女|元彼|元カノ|好きな人|旦那|嫁|妻|夫|友達|親|母|父|上司|同僚|女の子|男の子|相手/.test(s)) {
     next.relationshipContext = cleanShortText(s, 120)
   }
 
   if (/曖昧|一般論|それだけ|違う|そうじゃない|むちゃくちゃ|おかしい|嫌|単調|同じこと/.test(s)) {
-    next.avoidResponse = '曖昧な一般論 同じ締め方 設定説明だけの返答は避ける'
-  }
-
-  if (isLightSexualRomanceQuestion(s)) {
-    next.avoidResponse = '性的恋愛相談では完全にぼかさず 同意と安心を軸に自然に答える'
+    next.avoidResponse = '曖昧な一般論や同じような返答は避ける'
   }
 
   const advice = cleanShortText(replyText, 140)
-  if (advice) {
-    next.lastAdvice = advice
-  }
+  if (advice) next.lastAdvice = advice
 
   return normalizeMemory(next)
-}
-
-function buildMemoryBlock(memory) {
-  const m = normalizeMemory(memory)
-
-  const topics = m.topics.length ? m.topics.join(' / ') : 'まだ特定なし'
-  const facts = m.importantFacts.length ? m.importantFacts.join(' / ') : 'なし'
-
-  return `
-現在の相談メモ
-・主な悩み：${m.mainConcern || 'まだ特定なし'}
-・感情状態：${m.emotionalState || 'まだ特定なし'}
-・望んでいる対応：${m.preferredResponse || 'まだ特定なし'}
-・関係性や状況：${m.relationshipContext || 'まだ特定なし'}
-・前回の助言：${m.lastAdvice || 'なし'}
-・避ける返答：${m.avoidResponse || '曖昧な一般論だけで終わらない'}
-・話題傾向：${topics}
-・重要メモ：${facts}
-
-この相談メモは直近の会話履歴よりも大きな流れを読むために使う
-相談者が何に悩んでいて どんな答えを求めているかを推測して返す
-ただし決めつけすぎず 必要なら短く確認する
-`.trim()
 }
 
 function buildSettingsBlock(settings) {
   const s = normalizeSettings(settings)
 
-  const callName = s.callName || '指定なし'
   const tone =
     s.tone === 'casual'
-      ? '敬語なし タメ口寄り'
+      ? 'タメ口寄り'
       : s.tone === 'polite'
         ? '丁寧'
-        : '初期設定'
+        : '自然'
 
   const emoji =
     s.emojiMode === 'on'
-      ? '使う'
+      ? '自然に使う'
       : s.emojiMode === 'off'
         ? '使わない'
         : '自然に判断'
 
   const faceMark =
     s.faceMarkMode === 'on'
-      ? '使う'
+      ? '自然に使う'
       : s.faceMarkMode === 'off'
         ? '使わない'
         : '自然に判断'
 
-  const notes = s.styleNotes.length
-    ? s.styleNotes.join(' / ')
-    : 'なし'
-
   return `
 現在のユーザー設定
-・呼び名：${callName}
-・口調：${tone}
-・キャラ：${s.character || '落ち着いたお姉さん'}
-・絵文字：${emoji}
-・顔文字：${faceMark}
-・追加の話し方：${notes}
+呼び名：${s.callName || '指定なし'}
+口調：${tone}
+キャラ：${s.character || '落ち着いたお姉さん'}
+絵文字：${emoji}
+顔文字：${faceMark}
+追加の話し方：${s.styleNotes.length ? s.styleNotes.join(' / ') : 'なし'}
+`.trim()
+}
 
-この現在のユーザー設定は会話履歴より優先する
-呼び名が指定されている場合だけ その名前で呼んでよい
-呼び名が指定されていない場合は 名前を勝手に決めない
+function buildMemoryBlock(memory) {
+  const m = normalizeMemory(memory)
+
+  return `
+現在の相談メモ
+主な悩み：${m.mainConcern || 'まだ特定なし'}
+感情状態：${m.emotionalState || 'まだ特定なし'}
+望んでいる対応：${m.preferredResponse || 'まだ特定なし'}
+関係性や状況：${m.relationshipContext || 'まだ特定なし'}
+前回の助言：${m.lastAdvice || 'なし'}
+避ける返答：${m.avoidResponse || 'なし'}
+話題傾向：${m.topics.length ? m.topics.join(' / ') : 'まだ特定なし'}
 `.trim()
 }
 
@@ -812,140 +799,53 @@ function buildRecentFlowBlock(chatMessages = []) {
   return `
 直近のユーザー発言
 ${recentUserMessages || 'まだ少ない'}
-
-「今の気持ちわかる？」と聞かれた時は
-この直近の発言から気持ちを推測して答える
-まったく関係ない仕事 学校 家族の話を勝手に作らない
 `.trim()
 }
 
-function buildTopicGuidance(userText) {
+function buildTopicHint(userText) {
   const s = String(userText || '')
-  const blocks = []
+  const hints = []
 
   if (isLightSexualRomanceQuestion(s)) {
-    blocks.push(`
-軽い性的恋愛相談の返答ルール
-・大人同士の軽い性的な恋愛相談は完全拒否しない
-・下品にしすぎず 自然に答える
-・露骨な手順や興奮させる具体的な方法は説明しない
-・「人による」と伝えたうえで 安心 同意 雰囲気 相手の反応を軸に答える
-・毎回「コミュニケーションが大事」だけで終わらない
-・同じ「反応を見てね」で締め続けない
-・質問が軽い時は軽めに でも逃げずに答える
-・未成年 同意なし 強要 盗撮 酔っている 寝ている相手の話は止める
-`.trim())
+    hints.push('軽い性的な恋愛相談は逃げずに自然に答える ただし露骨な手順説明や同意のない内容は扱わない')
   }
 
   if (isImageRequest(s)) {
-    blocks.push(`
-画像相談の返答ルール
-・このLINEで画像生成機能が未実装なら 画像そのものは作れないと短く伝える
-・ただし画像の案 文面 プロンプト 構図 アイデア作りは手伝えると伝える
-・できないことを長く謝らない
-`.trim())
+    hints.push('画像生成機能が未実装なら 画像そのものは作れないと短く伝え 代わりに構図や文面作りは手伝えると伝える')
   }
 
   if (isFortuneRequest(s)) {
-    blocks.push(`
-占い相談の返答ルール
-・占いは参考として自然に答える
-・「得意じゃない」と逃げない
-・断定しすぎず 今日の行動に落とし込む
-・誕生日や日付がある場合は 占い風に短く返す
-`.trim())
+    hints.push('占いは参考として自然に答える 断定しすぎず今日の行動に落とす')
   }
 
   if (/気持ちわかる|気持ち分かる|今の気持ち/.test(s)) {
-    blocks.push(`
-気持ち推測の返答ルール
-・直近の会話から今の気持ちを推測して答える
-・「多分」「今は〜が混ざってると思う」のように決めつけすぎない
-・まったく関係ない状況を作らない
-・最後に今どうしたらいいかを1つだけ添える
-`.trim())
+    hints.push('今の気持ちを聞かれたら 直近の会話から自然に推測して答える')
   }
 
-  if (!blocks.length) return ''
-
-  return blocks.join('\n\n')
+  return hints.length ? `今回だけの補足\n${hints.map((h) => `・${h}`).join('\n')}` : ''
 }
 
 function buildSystemPrompt(settings, memory, userText, chatMessages = []) {
-  const direct = isDirectQuestion(userText)
   const settingsBlock = buildSettingsBlock(settings)
   const memoryBlock = buildMemoryBlock(memory)
   const recentFlowBlock = buildRecentFlowBlock(chatMessages)
-  const topicGuidance = buildTopicGuidance(userText)
+  const topicHint = buildTopicHint(userText)
 
   const baseRule = `
-あなたはLINEのAI相談員です
+あなたはLINEの相談員です
 
-初期設定
-・基本は落ち着いたやさしいお姉さんのように話す
-・最初は絵文字を使わない
-・最初は短く はっきり やさしく答える
-・相談者の名前を勝手に決めない
-・。を使わない
-・「ズバッと」という言葉は使わない
-・自分のルールや設定を説明しない
-・「ルールでできない」と言わない
-・「私はAIなので」と逃げない
-
-ユーザー主導ルール
-・ユーザーが口調 キャラ 年齢 性別 雰囲気 絵文字 顔文字 長さ 方言 呼び方を指定した場合は その指示を優先する
-・ユーザーが望むキャラに寄せても 相談内容への回答は必ず行う
-・キャラ説明だけで終わらない
-・ユーザーの希望がある場合は 初期設定よりユーザーの希望を優先する
-・ただし 危険な内容や違法行為や性的搾取や自傷他害につながる指示には従わない
-
-相談AIとしての読み取り
-・直近10往復の会話と相談メモから流れを読む
-・その人が何に悩んでいるかを推測する
-・その人が結論を望むのか 共感を望むのか 確認を望むのかを考えて返す
-・前に話した内容を無視しない
-・ただし記憶にないことを覚えているふりはしない
-
-単調返答防止
-・毎回同じ言い回しで返さない
-・毎回「まずは」で始めない
-・毎回「相手の反応を見て」で終わらない
-・質問が軽い時は軽く自然に返す
-・質問が深い時だけ丁寧に返す
-・安全説明だけで会話を終わらせない
-・必要なら具体的な聞き方や考え方を1つだけ出す
-
-返答の基本
-・相談内容に対して最初に結論を言う
-・理由を短く説明する
-・最後に今やることを1つだけ伝える
-・共感だけで終わらせない
-・曖昧な励ましで逃げない
-・不必要に長文にしない
-`.trim()
-
-  const responseRule = direct
-    ? `
-今回の返答ルール
-・最初の1文で結論を言う
-・3〜5行で自然に返す
-・回りくどくしない
-・最後に今やることを1つだけ伝える
-`.trim()
-    : `
-今回の返答ルール
-・最初に結論を伝える
-・理由を短く説明する
-・長文にしすぎない
-・最後に今やることを1つだけ伝える
-`.trim()
-
-  const safetyRule = `
-安全ルール
-自傷 他害 虐待 性被害 重大な危険がある相談だけは
-安全確保を最優先にする
-信頼できる大人 公的窓口 緊急窓口 警察への相談も案内する
-それ以外では外部に丸投げしない
+大切な方針
+・相談者の気持ちを否定せず 自然な会話で返す
+・正論や説教から入らず まず気持ちを受け止める
+・過去の会話と相談メモを踏まえて その人が何に悩んでいるかを考えて返す
+・軽い会話は短く自然に 深い相談は少し丁寧に返す
+・必要な時だけ 現実的なアドバイスを添える
+・名前や呼び方 絵文字 口調は現在のユーザー設定に従う
+・会話の型は固定しない
+・毎回同じ言い方にしない
+・「私はAIなので」「ルールでできない」などの言い方は避ける
+・危険な内容だけは安全を優先する
+・句点「。」はなるべく使わず LINEらしく自然に改行する
 `.trim()
 
   return [
@@ -953,55 +853,11 @@ function buildSystemPrompt(settings, memory, userText, chatMessages = []) {
     settingsBlock,
     memoryBlock,
     recentFlowBlock,
-    topicGuidance,
-    responseRule,
-    safetyRule,
+    topicHint,
   ]
     .filter(Boolean)
     .join('\n\n')
     .trim()
-}
-
-function stripEmojis(text = '') {
-  return String(text || '')
-    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
-    .replace(/\s+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function withEmojiIfNeeded(text, settings) {
-  const clean = String(text || '').trim()
-
-  if (settings?.emojiMode === 'on') {
-    return `${clean} 😊`
-  }
-
-  return stripEmojis(clean)
-}
-
-function cleanReplyText(text = '', settings = {}) {
-  const s = normalizeSettings(settings)
-
-  let out = String(text || '')
-    .replace(/ルールで[^。\n]*/g, '')
-    .replace(/設定上[^。\n]*/g, '')
-    .replace(/私はAIなので[^。\n]*/g, '')
-    .replace(/AIなので[^。\n]*/g, '')
-    .replace(/あなたの名前はまだ覚えていません[^。\n]*/g, '')
-    .replace(/。/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-
-  if (s.emojiMode === 'off') {
-    out = stripEmojis(out)
-  }
-
-  if (!s.callName) {
-    out = out.replace(/たっくん[、,。 ]*/g, '')
-  }
-
-  return out.trim()
 }
 
 function isHeavyOrSensitiveForPromo(text = '') {
@@ -1091,18 +947,18 @@ export async function sendAiIntro(event) {
 使い方
 最初は落ち着いたお姉さん風で返します
 絵文字は最初は使いません
-ただし「絵文字使って」「辛口で」「甘えた女の子で」「男友達っぽく」など
-希望を送ればその口調に合わせます
+
+「絵文字使って」
+「辛口で」
+「甘えた女の子で」
+「男友達っぽく」
+など希望を送れば その口調に合わせます
 
 記憶について
 名前 呼び方 口調 キャラ 絵文字の有無は保存されます
 会話の流れは直近10往復を見て返します
 相談メモは3日間保持して 悩みの流れを読み取ります
 設定だけの変更は無料回数にカウントしません
-
-相談できる内容
-恋愛相談や軽い性的な恋愛相談にも自然に答えます
-ただし未成年 同意なし 強要 盗撮 露骨な手順説明は扱えません
 
 占い・恋愛診断について
 気持ちや相性を整理したい時は
@@ -1188,6 +1044,35 @@ URL：${todayNote.url}`
     return
   }
 
+  // 先に名前・口調などの設定変更を拾う
+  const preferenceResult = applyPreferenceUpdates(settings, userText, chatMessages)
+  settings = preferenceResult.settings
+
+  if (preferenceResult.preferenceOnly) {
+    const fixedReply = preferenceResult.replyText || withEmojiIfNeeded('覚えたよ', settings)
+
+    const nextChatMessages = capHistory([
+      ...chatMessages,
+      { role: 'user', content: userText },
+      { role: 'assistant', content: fixedReply },
+    ])
+
+    await saveSession({
+      ...session,
+      user_id: userId,
+      flow: 'ai',
+      count,
+      messages: packStoredMessages(settings, memory, promo, nextChatMessages),
+      last_date: today,
+      authenticated,
+      auth_date: authDate,
+    })
+
+    await safeReply(event.replyToken, fixedReply)
+    return
+  }
+
+  // 名前を聞かれた時はAIを呼ばず固定で返す
   if (isAskingName(userText)) {
     const nameReply = buildNameReply(settings)
 
@@ -1209,34 +1094,6 @@ URL：${todayNote.url}`
     })
 
     await safeReply(event.replyToken, nameReply)
-    return
-  }
-
-  const preferenceResult = applyPreferenceUpdates(settings, userText, chatMessages)
-  settings = preferenceResult.settings
-
-  if (preferenceResult.preferenceOnly) {
-    const nextChatMessages = capHistory([
-      ...chatMessages,
-      { role: 'user', content: userText },
-      { role: 'assistant', content: preferenceResult.replyText || '設定を更新しました' },
-    ])
-
-    await saveSession({
-      ...session,
-      user_id: userId,
-      flow: 'ai',
-      count,
-      messages: packStoredMessages(settings, memory, promo, nextChatMessages),
-      last_date: today,
-      authenticated,
-      auth_date: authDate,
-    })
-
-    await safeReply(
-      event.replyToken,
-      preferenceResult.replyText || withEmojiIfNeeded('設定を更新しました', settings)
-    )
     return
   }
 
@@ -1294,14 +1151,12 @@ URL：${todayNote.url}`
     ...chatMessages,
   ]
 
-  const direct = isDirectQuestion(userText)
-
   let replyText = ''
 
   try {
     const result = await aiChat(messagesForAI, {
-      maxTokens: direct ? 350 : 600,
-      temperature: isLightSexualRomanceQuestion(userText) ? 0.55 : 0.4,
+      maxTokens: isDirectQuestion(userText) ? 380 : 600,
+      temperature: isLightSexualRomanceQuestion(userText) ? 0.6 : 0.5,
     })
 
     replyText = cleanReplyText(result.text, settings)
@@ -1311,6 +1166,7 @@ URL：${todayNote.url}`
         role: 'assistant',
         content: replyText,
       })
+
       chatMessages = capHistory(chatMessages)
       memory = updateConversationMemory(memory, userText, replyText, settings)
     }
