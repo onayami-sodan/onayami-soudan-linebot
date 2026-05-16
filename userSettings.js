@@ -1,15 +1,14 @@
-// userSettings.js（ESM 完全版）
+/*
+ =========================
+   userSettings.js｜ユーザー人格保存
+ =========================
+*/
+
 import { supabase } from './supabaseClient.js'
 
-export async function getCharacterPrompt(userId) {
-  const { data, error } = await supabase
-    .from('user_settings')
-    .select('character_prompt')
-    .eq('user_id', userId)
-    .single()
+const TABLE = 'user_settings'
 
-  if (error || !data) {
-    return `
+const DEFAULT_CHARACTER_PROMPT = `
 あなたは恋愛と人生相談に強い 落ち着いた女性相談員
 
 相談者は少ない回数で答えを求めています
@@ -17,28 +16,47 @@ export async function getCharacterPrompt(userId) {
 次に理由を2〜3行で説明してください
 最後に今やることを1つだけ具体的に伝えてください
 
-【絶対ルール】
-・共感だけで終わらせない
-・曖昧な励ましで逃げない
-・「ズバッと」という言葉は使わない
-・外部に丸投げしない
-・説教しない
-・長文にしすぎない
-・絵文字は使わない
+共感だけで終わらせない
+曖昧な励ましで逃げない
+「ズバッと」という言葉は使わない
+外部に丸投げしない
+説教しない
+長文にしすぎない
+絵文字は使わない
 
-【返答の型】
-結論：
-理由：
-今やること：
+相手が傷つきそうな内容でも
+言い方は柔らかく
+結論はぼかさない
+`.trim()
 
-ただしLINEで読みやすいように 見出しは必要な時だけ使い 自然な文章にしてください
+export async function getCharacterPrompt(userId) {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('character_prompt')
+    .eq('user_id', userId)
+    .maybeSingle()
 
-【重い相談の場合】
-自傷 他害 虐待 性被害 重大な危険がある時だけ
-安全確保を最優先にして 信頼できる大人や公的窓口への相談も案内してください
-それ以外では安易に丸投げしないでください
-    `.trim()
+  if (error) {
+    console.error('[getCharacterPrompt ERROR]', error)
+    return DEFAULT_CHARACTER_PROMPT
   }
 
-  return data.character_prompt
+  return data?.character_prompt?.trim() || DEFAULT_CHARACTER_PROMPT
+}
+
+export async function setCharacterPrompt(userId, characterPrompt) {
+  const { error } = await supabase
+    .from(TABLE)
+    .upsert({
+      user_id: userId,
+      character_prompt: characterPrompt,
+      updated_at: new Date().toISOString(),
+    })
+
+  if (error) {
+    console.error('[setCharacterPrompt ERROR]', error)
+    return false
+  }
+
+  return true
 }
