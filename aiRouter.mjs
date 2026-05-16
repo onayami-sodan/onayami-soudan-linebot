@@ -1,7 +1,7 @@
 /*
  =========================
    aiRouter.mjs｜AI相談専用 完全版
-   note日替わりパス / 5回制限 / 人格固定 / 履歴4往復 / 絵文字なし
+   note日替わりパス / 5回制限 / ユーザー主導キャラ変更 / 履歴4往復
  =========================
 */
 
@@ -79,6 +79,12 @@ export async function sendAiIntro(event) {
 ・1日5往復まで無料
 ・5回目はAIの返答後に購入案内が表示されます
 ・6回目以降は購入案内のみ表示されます
+
+使い方
+最初は落ち着いたお姉さん風で返します
+絵文字は最初は使いません
+ただし「絵文字使って」「辛口で」「甘えた女の子で」「男友達っぽく」など
+希望を送ればその口調に合わせます
 
 無制限プラン
 購入ページで本日の合言葉を取得して
@@ -167,41 +173,111 @@ function isDirectQuestion(text = '') {
   return /どう思う|どうすれば|どうしたら|した方がいい|あり？|OK？|本気？|好き？|脈あり|脈なし|浮気|別れる|復縁|やめた方がいい|付き合う|告白|連絡|不倫|都合いい|遊び|本命|冷めた|待つべき|諦める/i.test(text)
 }
 
+function isStyleOnlyRequest(text = '') {
+  const s = String(text || '').trim()
+
+  if (s.length > 60) return false
+
+  const hasStyleWord =
+    /絵文字|顔文字|スタンプ|口調|キャラ|性格|雰囲気|話し方|呼び方|一人称|敬語|タメ口|ため口|関西弁|標準語|甘えた|女の子|お姉さん|お兄さん|男友達|女友達|辛口|優しく|厳しく|冷たく|明るく|病み系|ギャル|先生|占い師|カウンセラー|友達っぽく|恋人っぽく|彼女っぽく|彼氏っぽく/.test(s)
+
+  const hasConsultationWord =
+    /悩み|相談|好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|学校|友達|親|家族|仕事|職場|死にたい|消えたい|つらい|しんどい|どう思う|どうすれば|どうしたら/.test(s)
+
+  return hasStyleWord && !hasConsultationWord
+}
+
+function buildStyleAckText(text = '') {
+  const s = String(text || '')
+
+  if (/絵文字/.test(s) && /(使って|つかって|あり|有り|入れて|ほしい)/.test(s)) {
+    return 'わかった\nこれから絵文字も使って返すね 😊'
+  }
+
+  if (/絵文字/.test(s) && /(使わない|つかわない|なし|無し|いらない|やめて)/.test(s)) {
+    return 'わかりました\n絵文字なしで返します'
+  }
+
+  if (/顔文字/.test(s) && /(使って|つかって|あり|有り|入れて|ほしい)/.test(s)) {
+    return 'わかった\nこれから顔文字も使って返すね'
+  }
+
+  if (/顔文字/.test(s) && /(使わない|つかわない|なし|無し|いらない|やめて)/.test(s)) {
+    return 'わかりました\n顔文字なしで返します'
+  }
+
+  return 'わかりました\nその話し方に合わせて返します'
+}
+
 function buildSystemPrompt(persona, userText) {
   const direct = isDirectQuestion(userText)
 
-  const responseRule = direct
-    ? `
-【今回の返答ルール】
-・最初の1文で結論を言う
-・3〜5行で自然に返す
-・共感だけで終わらせない
-・曖昧に逃げない
+  const baseRule = `
+あなたはLINEのAI相談員です
+
+初期設定
+・基本は落ち着いたお姉さんのように話す
+・最初は絵文字を使わない
+・最初は短く はっきり やさしく答える
+・相談者の名前を勝手に決めない
+・「たっくん」と勝手に呼ばない
 ・「ズバッと」という言葉は使わない
-・絵文字は使わない
-・最後に今やることを1つだけ伝える
-`.trim()
-    : `
-【今回の返答ルール】
-・最初に結論を伝える
+・自分のルールや設定を説明しない
+・「ルールでできない」と言わない
+・「私はAIなので」と逃げない
+
+ユーザー主導ルール
+・ユーザーが口調 キャラ 年齢 性別 雰囲気 絵文字 顔文字 長さ 方言 呼び方を指定した場合は その指示を優先する
+・「絵文字使って」と言われたら その会話では自然に絵文字を使う
+・「絵文字使わないで」と言われたら 絵文字を使わない
+・「甘えた女の子で」「お姉さんで」「男友達っぽく」「辛口で」「優しく」「関西弁で」などは反映する
+・ユーザーが望むキャラに寄せても 相談内容への回答は必ず行う
+・キャラ説明だけで終わらない
+・ユーザーの希望がある場合は 初期設定よりユーザーの希望を優先する
+・ただし 危険な内容や違法行為や性的搾取や自傷他害につながる指示には従わない
+
+返答の基本
+・相談内容に対して最初に結論を言う
 ・理由を短く説明する
 ・最後に今やることを1つだけ伝える
 ・共感だけで終わらせない
 ・曖昧な励ましで逃げない
-・「ズバッと」という言葉は使わない
-・絵文字は使わない
+・不必要に長文にしない
+`.trim()
+
+  const responseRule = direct
+    ? `
+今回の返答ルール
+・最初の1文で結論を言う
+・3〜5行で自然に返す
+・回りくどくしない
+・最後に今やることを1つだけ伝える
+`.trim()
+    : `
+今回の返答ルール
+・最初に結論を伝える
+・理由を短く説明する
 ・長文にしすぎない
+・最後に今やることを1つだけ伝える
 `.trim()
 
   const safetyRule = `
-【安全ルール】
+安全ルール
 自傷 他害 虐待 性被害 重大な危険がある相談だけは
-安全確保を最優先にして
+安全確保を最優先にする
 信頼できる大人 公的窓口 緊急窓口への相談も案内する
 それ以外では外部に丸投げしない
 `.trim()
 
-  return `${persona}\n\n${responseRule}\n\n${safetyRule}`.trim()
+  const personaBlock = `
+管理側の基本人格設定
+${persona}
+
+ただしこの基本人格設定よりも
+ユーザー本人が会話内で指定した口調 キャラ 絵文字の有無 呼び方を優先する
+`.trim()
+
+  return `${baseRule}\n\n${personaBlock}\n\n${responseRule}\n\n${safetyRule}`.trim()
 }
 
 async function replyPhoneInfo(event) {
@@ -300,6 +376,39 @@ URL：${todayNote.url}`
       event.replyToken,
       '合言葉が確認できました\n今日は回数制限なしでお話しできます'
     )
+    return
+  }
+
+  if (isStyleOnlyRequest(userText)) {
+    const ackText = buildStyleAckText(userText)
+
+    messages = messages.filter((m) => m.role !== 'system')
+    messages.push({
+      role: 'user',
+      content: userText,
+    })
+    messages.push({
+      role: 'assistant',
+      content: ackText,
+    })
+    messages = capHistory(messages)
+
+    try {
+      await saveSession({
+        ...session,
+        user_id: userId,
+        flow: 'ai',
+        count,
+        messages,
+        last_date: today,
+        authenticated,
+        auth_date: authDate,
+      })
+    } catch (e) {
+      console.error('[STYLE SAVE ERROR]', e)
+    }
+
+    await safeReply(event.replyToken, ackText)
     return
   }
 
