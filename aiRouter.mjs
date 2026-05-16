@@ -3,6 +3,7 @@
    aiRouter.mjs｜AI相談専用 完全版
    note日替わりパス / 5回制限 / 3日保持 / ユーザー設定固定保存
    履歴10往復 / 相談メモ保持 / 軽い性的恋愛相談対応 / 単調返答防止
+   占い・恋愛診断の自然誘導 1日1回
  =========================
 */
 
@@ -22,6 +23,9 @@ const SETTINGS_TYPE = 'user_preferences_v1'
 const MEMORY_ROLE = 'memory'
 const MEMORY_TYPE = 'conversation_memory_v1'
 
+const PROMO_ROLE = 'promo'
+const PROMO_TYPE = 'daily_rich_menu_promo_v1'
+
 const FIFTH_TURN_GUIDE_TEXT =
   `ここまでが本日の無料相談の5回目です
 
@@ -32,9 +36,10 @@ LINEに入力してください`
 function buildLimitOnlyText(todayNote) {
   return `今日は無料分を使い切っています
 
-明日になればまた5回まで話せます
+無料回数が戻るまでは
+リッチメニューから占い・恋愛診断も無料で試してみてね♡
 
-続けて相談したい場合は
+続けてAI相談したい場合は
 こちらから本日の合言葉を入手してください
 ${todayNote.url}`
 }
@@ -98,6 +103,13 @@ function getDefaultMemory() {
   }
 }
 
+function getDefaultPromo() {
+  return {
+    lastPromoDate: '',
+    lastPromoType: '',
+  }
+}
+
 function normalizeSettings(settings = {}) {
   const base = getDefaultSettings()
 
@@ -116,6 +128,15 @@ function normalizeMemory(memory = {}) {
     ...memory,
     topics: Array.isArray(memory.topics) ? memory.topics.slice(0, 8) : [],
     importantFacts: Array.isArray(memory.importantFacts) ? memory.importantFacts.slice(0, 10) : [],
+  }
+}
+
+function normalizePromo(promo = {}) {
+  const base = getDefaultPromo()
+
+  return {
+    ...base,
+    ...promo,
   }
 }
 
@@ -161,6 +182,7 @@ function splitStoredMessages(storedMessages, recent) {
     return {
       settings: getDefaultSettings(),
       memory: getDefaultMemory(),
+      promo: getDefaultPromo(),
       chatMessages: [],
     }
   }
@@ -181,18 +203,28 @@ function splitStoredMessages(storedMessages, recent) {
       m.content.type === MEMORY_TYPE
   )
 
+  const promoItem = storedMessages.find(
+    (m) =>
+      m &&
+      m.role === PROMO_ROLE &&
+      m.content &&
+      m.content.type === PROMO_TYPE
+  )
+
   const settings = normalizeSettings(settingsItem?.content?.data || {})
   const memory = normalizeMemory(memoryItem?.content?.data || {})
+  const promo = normalizePromo(promoItem?.content?.data || {})
   const chatMessages = capHistory(storedMessages)
 
   return {
     settings,
     memory,
+    promo,
     chatMessages,
   }
 }
 
-function packStoredMessages(settings, memory, chatMessages) {
+function packStoredMessages(settings, memory, promo, chatMessages) {
   return [
     {
       role: SETTINGS_ROLE,
@@ -206,6 +238,13 @@ function packStoredMessages(settings, memory, chatMessages) {
       content: {
         type: MEMORY_TYPE,
         data: normalizeMemory(memory),
+      },
+    },
+    {
+      role: PROMO_ROLE,
+      content: {
+        type: PROMO_TYPE,
+        data: normalizePromo(promo),
       },
     },
     ...capHistory(chatMessages),
@@ -892,6 +931,45 @@ function cleanReplyText(text = '', settings = {}) {
   return out.trim()
 }
 
+function isHeavyOrSensitiveForPromo(text = '') {
+  const s = String(text || '')
+
+  return (
+    /死にたい|消えたい|自傷|殺したい|虐待|性被害|レイプ|襲われ|暴力|怖い|助けて|しんどい|つらい|辛い/.test(s) ||
+    isLightSexualRomanceQuestion(s) ||
+    isUnsafeSexualRequest(s)
+  )
+}
+
+function shouldSuggestRichMenuPromo({ userText, replyText, promo, today, newCount }) {
+  const s = String(userText || '')
+  const answer = String(replyText || '')
+  const p = normalizePromo(promo)
+
+  if (p.lastPromoDate === today) return false
+  if (newCount >= 5) return false
+  if (isHeavyOrSensitiveForPromo(s)) return false
+
+  const looksInterested =
+    /占い|運勢|今日の運勢|明日の運勢|相性|恋愛診断|診断|恋愛タイプ|性格診断|相手の気持ち|本音|未来|誕生日|生年月日|星座|手相/.test(s)
+
+  const answerNaturallyRelated =
+    /相性|気持ち|本音|整理|診断|占い|運勢|恋愛タイプ/.test(answer)
+
+  return looksInterested || (answerNaturallyRelated && /好き|恋愛|相性|気持ち|本音|迷う|わからない/.test(s))
+}
+
+function buildRichMenuPromoText(settings) {
+  return withEmojiIfNeeded(
+    `ちなみに 気持ちや相性をもう少し整理したい時は
+リッチメニューの占い・恋愛診断も無料で試せるよ
+
+今の相談と合わせて見ると
+少し整理しやすいかも`,
+    settings
+  )
+}
+
 async function replyPhoneInfo(event) {
   const text =
     '電話でも相談できます\n' +
@@ -949,6 +1027,10 @@ export async function sendAiIntro(event) {
 相談できる内容
 恋愛相談や軽い性的な恋愛相談にも自然に答えます
 ただし未成年 同意なし 強要 盗撮 露骨な手順説明は扱えません
+
+占い・恋愛診断について
+気持ちや相性を整理したい時は
+リッチメニューから無料で試せます
 
 無制限プラン
 購入ページで本日の合言葉を取得して
@@ -1010,7 +1092,7 @@ URL：${todayNote.url}`
   let authenticated = sameDay ? !!session.authenticated : false
   let authDate = sameDay ? session.auth_date || null : null
 
-  let { settings, memory, chatMessages } = splitStoredMessages(session.messages, recent)
+  let { settings, memory, promo, chatMessages } = splitStoredMessages(session.messages, recent)
 
   if (userText === todayNote.password) {
     await saveSession({
@@ -1020,7 +1102,7 @@ URL：${todayNote.url}`
       authenticated: true,
       auth_date: today,
       count,
-      messages: packStoredMessages(settings, memory, chatMessages),
+      messages: packStoredMessages(settings, memory, promo, chatMessages),
     })
 
     await safeReply(
@@ -1036,7 +1118,7 @@ URL：${todayNote.url}`
       user_id: userId,
       flow: 'ai',
       count,
-      messages: packStoredMessages(settings, memory, chatMessages),
+      messages: packStoredMessages(settings, memory, promo, chatMessages),
       last_date: today,
       authenticated,
       auth_date: authDate,
@@ -1055,7 +1137,7 @@ URL：${todayNote.url}`
       user_id: userId,
       flow: 'ai',
       count,
-      messages: packStoredMessages(settings, memory, chatMessages),
+      messages: packStoredMessages(settings, memory, promo, chatMessages),
       last_date: today,
       authenticated,
       auth_date: authDate,
@@ -1074,7 +1156,7 @@ URL：${todayNote.url}`
       user_id: userId,
       flow: 'ai',
       count,
-      messages: packStoredMessages(settings, memory, chatMessages),
+      messages: packStoredMessages(settings, memory, promo, chatMessages),
       last_date: today,
       authenticated,
       auth_date: authDate,
@@ -1090,7 +1172,7 @@ URL：${todayNote.url}`
       flow: 'ai',
       count,
       last_date: today,
-      messages: packStoredMessages(settings, memory, chatMessages),
+      messages: packStoredMessages(settings, memory, promo, chatMessages),
       authenticated,
       auth_date: authDate,
     })
@@ -1139,6 +1221,23 @@ URL：${todayNote.url}`
     replyText = withEmojiIfNeeded('うまく返せませんでした\nもう一度だけ送ってください', settings)
   }
 
+  if (
+    shouldSuggestRichMenuPromo({
+      userText,
+      replyText,
+      promo,
+      today,
+      newCount,
+    })
+  ) {
+    replyText = `${replyText}\n\n${buildRichMenuPromoText(settings)}`
+    promo = {
+      ...normalizePromo(promo),
+      lastPromoDate: today,
+      lastPromoType: 'fortune_love_diagnosis',
+    }
+  }
+
   if (!authenticated && newCount === 5) {
     replyText = `${replyText}\n\n${FIFTH_TURN_GUIDE_TEXT}\n${todayNote.url}`
   }
@@ -1148,7 +1247,7 @@ URL：${todayNote.url}`
       user_id: userId,
       flow: 'ai',
       count: newCount,
-      messages: packStoredMessages(settings, memory, chatMessages),
+      messages: packStoredMessages(settings, memory, promo, chatMessages),
       last_date: today,
       authenticated,
       auth_date: authDate,
