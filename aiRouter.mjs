@@ -3,7 +3,7 @@
    aiRouter.mjs｜AI相談専用 軽量自然会話版
    note日替わりパス / 7回制限 / 設定固定保存
    履歴10往復 / 相談メモ3日保持 / 名前保存強化
-   占い・恋愛診断の自然誘導 1日1回
+   占い・恋愛診断の文脈誘導 1日1回
  =========================
 */
 
@@ -229,17 +229,14 @@ function splitStoredMessages(storedMessages, recent) {
     (m) => m?.role === PROMO_ROLE && m?.content?.type === PROMO_TYPE
   )
 
-  // 名前 呼び方 口調 絵文字 キャラは3日判定に関係なく残す
   const settings = normalizeSettings(settingsItem?.content?.data || {})
 
-  // 会話履歴と相談メモだけ3日判定でリセット
   const memory = recent
     ? normalizeMemory(memoryItem?.content?.data || {})
     : getDefaultMemory()
 
   const chatMessages = recent ? capHistory(storedMessages) : []
 
-  // promoは1日1回判定用なので保持
   const promo = normalizePromo(promoItem?.content?.data || {})
 
   return {
@@ -445,7 +442,6 @@ function extractName(text = '', chatMessages = []) {
 
   if (!s) return ''
 
-  // 名前を聞いている文は絶対に登録しない
   if (/覚えてる|覚えた|知ってる|わかる|分かる|言って|教えて|なに|何|だれ|誰|\?|？/.test(s)) {
     return ''
   }
@@ -479,7 +475,6 @@ function extractName(text = '', chatMessages = []) {
     }
   }
 
-  // 直近で名前の話をしている時だけ「たっくんだよ」単体を名前として拾う
   if (nameContext) {
     const match = s.match(/^([^\s、。！？!?]{1,20})(?:だよ|です|やで|だ)$/)
     const value = match?.[1]?.trim()
@@ -870,25 +865,115 @@ function isHeavyOrSensitiveForPromo(text = '') {
   )
 }
 
-function shouldSuggestRichMenuPromo({ userText, replyText, promo, today, newCount }) {
-  const s = String(userText || '')
-  const answer = String(replyText || '')
+function buildPromoJudgeContext({ userText, replyText, memory, chatMessages }) {
+  const recentUserMessages = Array.isArray(chatMessages)
+    ? chatMessages
+        .filter((m) => m.role === 'user')
+        .slice(-6)
+        .map((m) => `・${String(m.content || '').slice(0, 100)}`)
+        .join('\n')
+    : ''
+
+  const m = normalizeMemory(memory)
+
+  return `
+直近のユーザー発言
+${recentUserMessages || 'なし'}
+
+今回のユーザー発言
+${String(userText || '')}
+
+今回のAI返答
+${String(replyText || '')}
+
+相談メモ
+主な悩み：${m.mainConcern || 'なし'}
+感情状態：${m.emotionalState || 'なし'}
+関係性や状況：${m.relationshipContext || 'なし'}
+話題傾向：${m.topics?.length ? m.topics.join(' / ') : 'なし'}
+`.trim()
+}
+
+function parsePromoJudge(text = '') {
+  const raw = String(text || '').trim()
+
+  try {
+    const jsonText = raw.match(/\{[\s\S]*\}/)?.[0] || raw
+    const data = JSON.parse(jsonText)
+    return data?.suggest === true
+  } catch {
+    return /^yes|true|出す|案内する/i.test(raw)
+  }
+}
+
+async function shouldSuggestRichMenuPromoByContext({
+  userText,
+  replyText,
+  promo,
+  today,
+  newCount,
+  memory,
+  chatMessages,
+}) {
   const p = normalizePromo(promo)
 
   if (p.lastPromoDate === today) return false
   if (newCount >= FREE_LIMIT) return false
-  if (isHeavyOrSensitiveForPromo(s)) return false
+  if (isHeavyOrSensitiveForPromo(userText)) return false
 
-  const looksInterested =
-    /占い|占って|運勢|今日の運勢|明日の運勢|相性|恋愛診断|診断|恋愛タイプ|性格診断|相手の気持ち|相手の本音|本音|未来|誕生日|生年月日|星座|手相/.test(s)
+  const judgePrompt = `
+あなたはLINE相談Botの案内判定だけを行います
 
-  const softIntent =
-    /私ってどんな|俺ってどんな|向いてる|合ってる|相性いい|気持ち知りたい|どう思われてる|脈あり|脈なし|恋愛運/.test(s)
+目的
+占い・恋愛診断の案内を出すべきかを
+単語ではなく会話の内容と流れで判断してください
 
-  const answerNaturallyRelated =
-    /相性|気持ち|本音|整理|診断|占い|運勢|恋愛タイプ/.test(answer)
+出してよい時
+・相性 相手の気持ち 恋愛傾向 自分の恋愛タイプを整理したそう
+・占い 診断 運勢を試したい気持ちが文脈から自然に見える
+・相談の流れとして 気持ちの整理に占い・恋愛診断が役立ちそう
+・案内しても会話の邪魔にならない
 
-  return looksInterested || softIntent || (answerNaturallyRelated && /好き|恋愛|相性|気持ち|本音|迷う|わからない/.test(s))
+出してはいけない時
+・学校 進路 仕事 家庭 メンタルなどの相談が中心
+・性的な相談や重い相談の途中
+・ただの雑談
+・単語が含まれているだけで 本人が試したそうではない
+・案内すると宣伝っぽく見える
+・今回の返答に足すと不自然
+
+必ずJSONだけで返してください
+{"suggest":true,"reason":"短く"}
+または
+{"suggest":false,"reason":"短く"}
+`.trim()
+
+  const context = buildPromoJudgeContext({
+    userText,
+    replyText,
+    memory,
+    chatMessages,
+  })
+
+  try {
+    const result = await aiChat(
+      [
+        { role: 'system', content: judgePrompt },
+        { role: 'user', content: context },
+      ],
+      {
+        maxTokens: 80,
+        temperature: 0,
+      }
+    )
+
+    if (!result?.ok) return false
+
+    return parsePromoJudge(result.text)
+  } catch (e) {
+    console.error('[PROMO JUDGE ERROR]', e)
+    return false
+  }
 }
 
 function buildRichMenuPromoText(settings) {
@@ -1044,7 +1129,6 @@ URL：${todayNote.url}`
     return
   }
 
-  // 先に名前・口調などの設定変更を拾う
   const preferenceResult = applyPreferenceUpdates(settings, userText, chatMessages)
   settings = preferenceResult.settings
 
@@ -1072,7 +1156,6 @@ URL：${todayNote.url}`
     return
   }
 
-  // 名前を聞かれた時はAIを呼ばず固定で返す
   if (isAskingName(userText)) {
     const nameReply = buildNameReply(settings)
 
@@ -1176,12 +1259,14 @@ URL：${todayNote.url}`
   }
 
   if (
-    shouldSuggestRichMenuPromo({
+    await shouldSuggestRichMenuPromoByContext({
       userText,
       replyText,
       promo,
       today,
       newCount,
+      memory,
+      chatMessages,
     })
   ) {
     replyText = `${replyText}\n\n${buildRichMenuPromoText(settings)}`
