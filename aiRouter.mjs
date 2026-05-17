@@ -1,9 +1,10 @@
 /*
  =========================
-   aiRouter.mjs｜AI相談専用 軽量自然会話版
+   aiRouter.mjs｜AI相談専用 完全版
    note日替わりパス / 7回制限 / 設定固定保存
    履歴10往復 / 相談メモ3日保持 / 名前保存強化
    占い・恋愛診断の文脈誘導 1日1回
+   子ども向け危険相談ルーター搭載
  =========================
 */
 
@@ -88,6 +89,104 @@ const noteList = [
   { password: 'lala18', url: 'https://note.com/noble_loris1361/n/nc4db829308a4' },
   { password: 'fufu31', url: 'https://note.com/noble_loris1361/n/n2f5274805780' },
 ]
+
+const SUPPORT_CONTACTS = {
+  immediateDanger: {
+    title: '今すぐ危ない時',
+    text: `今すぐ自分を傷つけそう
+今すぐ暴力を受けそう
+家や学校にいるのが危ない時は
+
+110 警察
+119 救急
+
+電話できない時は
+近くのコンビニ 駅 交番 人がいる場所に移動してね`,
+  },
+
+  selfHarm: {
+    title: '死にたい 消えたい気持ちが強い時',
+    text: `死にたい 消えたい気持ちが強い時は
+
+#いのちSOS
+0120-061-338
+
+よりそいホットライン
+0120-279-338
+
+今すぐ自分を傷つけそうなら
+110か119に電話してね`,
+  },
+
+  childLine: {
+    title: '子どもが誰にも言えない時',
+    text: `18歳までの子どもが話せる相談先だよ
+
+チャイルドライン
+0120-99-7777
+
+電話が怖い時は
+チャット相談が使える時もあるよ`,
+  },
+
+  schoolBullying: {
+    title: '学校 いじめ 先生からの被害',
+    text: `学校や先生 友達から傷つけられている時は
+
+24時間子供SOSダイヤル
+0120-0-78310
+
+こどもの人権110番
+0120-007-110
+
+先生に言いにくい時や
+先生から傷つけられている時は
+学校の外につながる方が安全なこともあるよ`,
+  },
+
+  parentAbuse: {
+    title: '親 家庭が安全じゃない時',
+    text: `親に言えない
+家が安全じゃない
+親から暴力 暴言 無視をされている時は
+
+児童相談所虐待対応ダイヤル
+189
+
+親が怖い時は
+無理に親へ話さなくていいよ`,
+  },
+
+  sexualViolence: {
+    title: '性的な被害を受けた時',
+    text: `性的なことを無理にされた
+怖いことをされた
+写真を送れと言われた時は
+
+性犯罪被害相談電話
+#8103
+
+緊急なら
+110 警察
+
+あなたが悪いんじゃないよ`,
+  },
+
+  datingDv: {
+    title: '恋人や相手から暴力 支配 脅しがある時',
+    text: `恋人や相手から
+暴力 脅し 束縛 無理な要求がある時は
+
+DV相談ナビ
+#8008
+
+DV相談プラス
+0120-279-889
+
+今すぐ危ない時は
+110に電話してね`,
+  },
+}
 
 function getDefaultSettings() {
   return {
@@ -236,7 +335,6 @@ function splitStoredMessages(storedMessages, recent) {
     : getDefaultMemory()
 
   const chatMessages = recent ? capHistory(storedMessages) : []
-
   const promo = normalizePromo(promoItem?.content?.data || {})
 
   return {
@@ -646,8 +744,8 @@ function detectTopic(text = '') {
 
   if (isLightSexualRomanceQuestion(s)) return '性的恋愛相談'
   if (/好き|彼氏|彼女|元彼|元カノ|復縁|浮気|不倫|告白|別れ|付き合|連絡|脈|本気|遊び|都合いい|相性/.test(s)) return '恋愛'
-  if (/学校|友達|クラス|先生|部活|勉強|受験/.test(s)) return '学校 友人関係'
-  if (/親|家族|母|父|兄|姉|弟|妹|家庭/.test(s)) return '家庭 家族'
+  if (/いじめ|先生|学校|友達|クラス|部活|勉強|受験|不登校|通信制|転校/.test(s)) return '学校 友人関係'
+  if (/親|家族|母|父|兄|姉|弟|妹|家庭|家/.test(s)) return '家庭 家族'
   if (/仕事|職場|上司|同僚|バイト|給料|転職/.test(s)) return '仕事 職場'
   if (/死にたい|消えたい|つらい|辛い|しんどい|疲れ|病ん|不安|怖い|寂しい|眠れない/.test(s)) return 'メンタル'
   if (/占い|運勢|誕生日|生年月日/.test(s)) return '占い'
@@ -659,7 +757,10 @@ function detectTopic(text = '') {
 function detectEmotion(text = '') {
   const s = String(text || '')
 
-  if (/死にたい|消えたい/.test(s)) return '危険度が高い可能性があるため安全確認を優先する'
+  if (/死にたい|消えたい|自殺|自傷|終わりにしたい|いなくなりたい/.test(s)) {
+    return '自傷や希死念慮の可能性があるため安全確認を優先する'
+  }
+
   if (/つらい|辛い|しんどい|疲れ|病ん/.test(s)) return 'かなり疲れていて受け止めを必要としている'
   if (/不安|怖い|心配/.test(s)) return '不安が強く安心材料と具体策を求めている'
   if (/寂しい|さみしい|孤独/.test(s)) return '寂しさが強く寄り添いを求めている'
@@ -718,7 +819,7 @@ function updateConversationMemory(memory, userText, replyText, settings) {
   if (emotion) next.emotionalState = emotion
   if (preferred) next.preferredResponse = preferred
 
-  if (/彼氏|彼女|元彼|元カノ|好きな人|旦那|嫁|妻|夫|友達|親|母|父|上司|同僚|女の子|男の子|相手/.test(s)) {
+  if (/彼氏|彼女|元彼|元カノ|好きな人|旦那|嫁|妻|夫|友達|親|母|父|上司|同僚|女の子|男の子|相手|先生/.test(s)) {
     next.relationshipContext = cleanShortText(s, 120)
   }
 
@@ -859,10 +960,229 @@ function isHeavyOrSensitiveForPromo(text = '') {
   const s = String(text || '')
 
   return (
-    /死にたい|消えたい|自傷|殺したい|虐待|性被害|レイプ|襲われ|暴力|怖い|助けて|しんどい|つらい|辛い/.test(s) ||
+    isCrisisRisk(s) ||
     isLightSexualRomanceQuestion(s) ||
     isUnsafeSexualRequest(s)
   )
+}
+
+function isCrisisRisk(text = '') {
+  const s = String(text || '')
+
+  return /死にたい|消えたい|生きたくない|自殺|自傷|切りたい|飛び降り|首吊|首つり|OD|オーバードーズ|薬を大量|もう無理|終わりにしたい|いなくなりたい|殺したい|殴られる|殴られた|蹴られる|蹴られた|虐待|暴力|性的被害|性被害|レイプ|襲われた|無理やり|写真を送れ|裸の写真|いじめ|いじめられ|先生にいじめ|先生から|体罰|暴言|家が怖い|親が怖い|親に言えない|家に帰りたくない/.test(s)
+}
+
+function detectRiskRoutesByRules(text = '', chatMessages = [], memory = {}) {
+  const s = String(text || '')
+  const context = [
+    s,
+    normalizeMemory(memory).mainConcern,
+    normalizeMemory(memory).relationshipContext,
+    ...(Array.isArray(chatMessages) ? chatMessages.slice(-6).map((m) => m.content) : []),
+  ].join('\n')
+
+  const routes = []
+  const flags = {
+    immediateDanger: false,
+    selfHarm: false,
+    schoolBullying: false,
+    teacherHarm: false,
+    parentAbuse: false,
+    homeUnsafe: false,
+    sexualViolence: false,
+    datingDv: false,
+    childLikely: false,
+  }
+
+  if (/今すぐ|今日|もう無理|限界|これから|今から|今この瞬間|家に帰りたくない|逃げたい/.test(context)) {
+    if (/死にたい|自殺|自傷|切りたい|飛び降り|首吊|首つり|OD|薬を大量|殺したい|殴られる|襲われ|暴力|家が怖い/.test(context)) {
+      flags.immediateDanger = true
+    }
+  }
+
+  if (/死にたい|消えたい|生きたくない|自殺|自傷|切りたい|飛び降り|首吊|首つり|OD|オーバードーズ|薬を大量|終わりにしたい|いなくなりたい/.test(context)) {
+    flags.selfHarm = true
+    routes.push('selfHarm')
+  }
+
+  if (/いじめ|いじめられ|無視|悪口|仲間外れ|クラス|学校|部活|同級生|先輩|後輩/.test(context)) {
+    flags.schoolBullying = true
+    routes.push('schoolBullying')
+  }
+
+  if (/先生にいじめ|先生から|先生も|先生が|担任|教師|体罰|不適切な指導|暴言|学校に言えない/.test(context)) {
+    flags.teacherHarm = true
+    flags.schoolBullying = true
+    routes.push('schoolBullying')
+  }
+
+  if (/親|母|父|お母さん|お父さん|家族|家/.test(context) && /殴|蹴|暴力|暴言|虐待|無視|怖い|帰りたくない|安全じゃない|言えない/.test(context)) {
+    flags.parentAbuse = true
+    flags.homeUnsafe = true
+    routes.push('parentAbuse')
+  }
+
+  if (/性被害|性的被害|レイプ|襲われ|無理やり|触られ|写真を送れ|裸の写真|盗撮|性的なことをされた|性犯罪/.test(context)) {
+    flags.sexualViolence = true
+    routes.push('sexualViolence')
+  }
+
+  if (/彼氏|彼女|恋人|旦那|夫|妻|パートナー|元彼|元カノ|相手/.test(context) && /暴力|脅し|束縛|支配|怖い|逃げたい|無理やり|監視/.test(context)) {
+    flags.datingDv = true
+    routes.push('datingDv')
+  }
+
+  if (/小学生|中学生|高校生|学校|先生|親|子ども|子供|未成年|18歳未満|17歳|16歳|15歳|14歳|13歳|12歳/.test(context)) {
+    flags.childLikely = true
+  }
+
+  if (flags.immediateDanger) routes.unshift('immediateDanger')
+
+  if (flags.childLikely && !routes.includes('childLine')) {
+    routes.push('childLine')
+  }
+
+  const uniqueRoutes = [...new Set(routes)].slice(0, 3)
+
+  return {
+    hasRisk: flags.immediateDanger || flags.selfHarm || flags.schoolBullying || flags.teacherHarm || flags.parentAbuse || flags.sexualViolence || flags.datingDv,
+    routes: uniqueRoutes,
+    flags,
+  }
+}
+
+function pickPrimaryRiskRoute(risk) {
+  if (risk.flags.immediateDanger) return 'immediateDanger'
+  if (risk.flags.parentAbuse) return 'parentAbuse'
+  if (risk.flags.sexualViolence) return 'sexualViolence'
+  if (risk.flags.teacherHarm || risk.flags.schoolBullying) return 'schoolBullying'
+  if (risk.flags.datingDv) return 'datingDv'
+  if (risk.flags.selfHarm) return 'selfHarm'
+  return risk.routes[0] || 'childLine'
+}
+
+function buildRiskLeadText(risk) {
+  if (risk.flags.teacherHarm) {
+    return `先生にも傷つけられてきたなら
+先生に相談してとは簡単に言えないよ
+
+学校の中だけで解決しようとしなくていい`
+  }
+
+  if (risk.flags.parentAbuse || risk.flags.homeUnsafe) {
+    return `親や家が安全じゃないなら
+親に相談してとは簡単に言えないよ
+
+まずは家の外につながれる相談先を使った方がいい`
+  }
+
+  if (risk.flags.sexualViolence) {
+    return `怖いことをされたなら
+あなたが悪いんじゃないよ
+
+一人で抱え込まなくていいし
+安全な相談先につながっていい`
+  }
+
+  if (risk.flags.selfHarm) {
+    return `話してくれてありがとう
+
+死にたいと思うくらいなら
+今かなり限界に近いと思う
+
+まず今日だけは
+自分を傷つけない場所にいてほしい`
+  }
+
+  if (risk.flags.schoolBullying) {
+    return `学校や友達のことで傷ついているなら
+学校の中だけで我慢しなくていいよ
+
+外につながれる相談先を使っていい`
+  }
+
+  return `話してくれてありがとう
+
+今の話は一人で抱えるには重すぎると思う`
+}
+
+function buildContactTextForRisk(risk) {
+  const primary = pickPrimaryRiskRoute(risk)
+  const order = [primary, ...risk.routes.filter((r) => r !== primary)]
+  const unique = [...new Set(order)]
+
+  const selected = unique
+    .map((key) => SUPPORT_CONTACTS[key])
+    .filter(Boolean)
+    .slice(0, risk.flags.immediateDanger ? 3 : 2)
+
+  return selected.map((item) => item.text).join('\n\n')
+}
+
+function buildRiskQuestion(risk) {
+  if (risk.flags.immediateDanger) {
+    return `今すぐ危ないなら
+この画面を閉じずに 110か119に電話してね
+
+電話できないなら
+近くの人がいる場所に移動して`
+  }
+
+  if (risk.flags.parentAbuse || risk.flags.homeUnsafe) {
+    return `今 家は安全？
+それとも家にいるのが怖い感じ？`
+  }
+
+  if (risk.flags.teacherHarm || risk.flags.schoolBullying) {
+    return `家は今 安全？
+親には話せそう？
+それとも親にも言えない感じ？`
+  }
+
+  if (risk.flags.sexualViolence) {
+    return `今その相手から離れられてる？
+まだ近くにいるなら まず人がいる場所に移動して`
+  }
+
+  if (risk.flags.selfHarm) {
+    return `今ひとり？
+自分を傷つける物が近くにあるなら
+少し離れた場所に置いてから返事して`
+  }
+
+  return `今はどこにいる？
+家 学校 外 どこかだけ教えて`
+}
+
+function buildRiskSupportReply(settings, userText, chatMessages, memory) {
+  const risk = detectRiskRoutesByRules(userText, chatMessages, memory)
+  const lead = buildRiskLeadText(risk)
+  const contacts = buildContactTextForRisk(risk)
+  const question = buildRiskQuestion(risk)
+
+  return withEmojiIfNeeded(
+    `${lead}
+
+${contacts}
+
+${question}`,
+    settings
+  )
+}
+
+function updateRiskMemory(memory, userText, replyText, risk) {
+  const next = normalizeMemory(memory)
+  const primary = pickPrimaryRiskRoute(risk)
+
+  next.mainConcern = cleanShortText(userText, 120)
+  next.emotionalState = '危険相談の可能性があるため安全確認を優先する'
+  next.preferredResponse = '責めずに受け止めながら 状況に合う相談先と安全確保を優先する'
+  next.relationshipContext = cleanShortText(userText, 120)
+  next.lastAdvice = cleanShortText(replyText, 140)
+  next.avoidResponse = '占い誘導 購入誘導 大人に相談だけの定型文 加害者側への誘導は避ける'
+  next.topics = addUniqueLimited(next.topics, `危険相談:${primary}`, 8)
+
+  return normalizeMemory(next)
 }
 
 function buildPromoJudgeContext({ userText, replyText, memory, chatMessages }) {
@@ -1045,6 +1365,10 @@ export async function sendAiIntro(event) {
 相談メモは3日間保持して 悩みの流れを読み取ります
 設定だけの変更は無料回数にカウントしません
 
+危険な相談について
+死にたい いじめ 虐待 性被害 先生や親からの被害などは
+無料回数に関係なく安全を優先して返します
+
 占い・恋愛診断について
 気持ちや相性を整理したい時は
 リッチメニューから無料で試せます
@@ -1177,6 +1501,32 @@ URL：${todayNote.url}`
     })
 
     await safeReply(event.replyToken, nameReply)
+    return
+  }
+
+  if (isCrisisRisk(userText)) {
+    const risk = detectRiskRoutesByRules(userText, chatMessages, memory)
+    const riskReply = buildRiskSupportReply(settings, userText, chatMessages, memory)
+    const nextMemory = updateRiskMemory(memory, userText, riskReply, risk)
+
+    const nextChatMessages = capHistory([
+      ...chatMessages,
+      { role: 'user', content: userText },
+      { role: 'assistant', content: riskReply },
+    ])
+
+    await saveSession({
+      ...session,
+      user_id: userId,
+      flow: 'ai',
+      count,
+      messages: packStoredMessages(settings, nextMemory, promo, nextChatMessages),
+      last_date: today,
+      authenticated,
+      auth_date: authDate,
+    })
+
+    await safeReply(event.replyToken, riskReply)
     return
   }
 
